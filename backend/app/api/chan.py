@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.indicators.chan import analyze, latest_signal
+from app.indicators.chanpy_bridge import analyze_via_chanpy
 from app.parquet import market_symbol_filter, scan_enriched_parquet
 from app.tickflow.repository import enriched_dirname
 
@@ -261,6 +262,41 @@ def clear_analysis_cache() -> None:
     """清空单票缠论缓存 (数据同步后手动调用, 或测试用)。"""
     with _analysis_lock:
         _analysis_cache.clear()
+    with _chanpy_analysis_lock:
+        _chanpy_analysis_cache.clear()
+
+
+# ===== chan.py 引擎缓存（双引擎分工：/analysis 走 chan.py）=====
+
+# /analysis 单票展示切 chan.py 引擎（换取线段+多级别+6类买卖点），结果同样按
+# (标的, 根数, 笔口径, 末日, 行数) 指纹缓存，与自研 analyze 的缓存互相独立。
+_chanpy_analysis_cache: dict[tuple, tuple[float, Any]] = {}
+_chanpy_analysis_lock = threading.Lock()
+
+
+def _analyze_chanpy_cached(symbol: str, lookback: int, strict: bool, df: pl.DataFrame):
+    """chan.py 引擎的缓存版：未命中才 build_chan（单票 ~46ms 内存数据源）。"""
+    key = _analysis_cache_key(symbol, lookback, strict, df)
+    now = time.monotonic()
+    with _chanpy_analysis_lock:
+        hit = _chanpy_analysis_cache.get(key)
+        if hit is not None and now - hit[0] < _MARKET_CACHE_TTL:
+            return hit[1]
+
+    analysis = analyze_via_chanpy(
+        df["date"].to_list(),
+        df["high"].to_numpy(),
+        df["low"].to_numpy(),
+        df["close"].to_numpy(),
+        strict=strict,
+        symbol=symbol,
+    )
+    with _chanpy_analysis_lock:
+        _chanpy_analysis_cache[key] = (time.monotonic(), analysis)
+        if len(_chanpy_analysis_cache) > _ANALYSIS_CACHE_MAX:
+            oldest = min(_chanpy_analysis_cache.items(), key=lambda kv: kv[1][0])[0]
+            _chanpy_analysis_cache.pop(oldest, None)
+    return analysis
 
 
 # ===== 端点 =====
@@ -273,13 +309,17 @@ def chan_analysis(
     lookback: int = Query(400, ge=60, le=1500, description="使用的日线根数"),
     strict: bool = Query(True, description="True 严格笔, False 宽松笔"),
 ):
-    """单票完整缠论结构 (笔 / 中枢 / 买卖点), 供 K 线图叠加。"""
+    """单票完整缠论结构 (笔 / 中枢 / 买卖点), 供 K 线图叠加。
+
+    单票展示走 chan.py 引擎（线段 + 6 类买卖点，双引擎分工）；/scan、/annotate、
+    策略回测仍走自研 analyze（快约 20 倍）。
+    """
     repo = request.app.state.repo
     df = _load_symbol_frame(repo, symbol, lookback)
     if df.is_empty() or df.height < _MIN_BARS_FOR_SCAN:
         raise HTTPException(status_code=404, detail=f"标的 {symbol} 日线数据不足, 无法做缠论分析")
     dates = [_iso(d) for d in df["date"].to_list()]
-    analysis = _analyze_cached(symbol, lookback, strict, df)
+    analysis = _analyze_chanpy_cached(symbol, lookback, strict, df)
     names = _instrument_names(repo)
     return _serialize(analysis, dates, symbol, names.get(symbol))
 
