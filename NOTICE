@@ -1,0 +1,51 @@
+tickflow-stock-panel (multi-market fork)
+========================================
+
+本项目是一个衍生作品（derivative work），基于以下上游开源项目二次开发：
+
+  项目名称: tickflow-stock-panel
+  上游仓库: https://github.com/shy3130/tickflow-stock-panel
+  上游作者: shy3130 / tickflow-stock-panel contributors
+  上游许可: MIT License
+  分叉基点: 上游 main 分支（详见本仓库保留的完整 Git 提交历史）
+
+上游项目的原始版权声明已完整保留于 LICENSE 文件中，未作任何删除或改写。
+本仓库同样以 MIT License 发布。
+
+
+本衍生作品所做的修改
+--------------------
+
+本 fork 的核心改动是将上游的「纯 A 股」工作台扩展为「A 股 / 港股 / 美股」多市场
+工作台。修改涉及 41 个既有文件，并新增以下文件：
+
+  backend/app/markets.py                        市场注册表（交易规则单一事实来源）
+  backend/app/api/indices_market.py             港美股指数 API 路由族
+  backend/app/services/index_sync_market.py     港美股指数数据同步
+  frontend/src/lib/market.tsx                   全局市场切换 Context
+  frontend/src/components/MarketNotSupported.tsx  市场不支持提示组件
+
+完整的新增功能说明见 README.md 的「本 Fork 新增功能」章节。
+
+
+第三方依赖与数据源声明
+----------------------
+
+本项目沿用上游的数据源与依赖声明：
+
+- 数据服务 TickFlow (https://tickflow.org) —— 使用前请遵守其服务条款。
+  本项目非 TickFlow 官方项目。
+- 数据源插件 stock-sdk (https://stock-sdk.linkdiary.cn) —— 遵循其各自的 ISC 协议。
+- 本 fork 新增的港美股指数数据取自腾讯、东方财富的公开免费行情接口，
+  仅用于个人学习研究，使用者需自行遵守相应服务条款。
+
+上游项目声明其「仅供学习研究使用，严禁商业用途」。本 fork 原样转述并尊重该声明，
+不对上游作者的授权意图作任何扩大或缩小解释。如需商业用途，请自行与上游作者及
+相关数据源服务方确认。
+
+
+免责声明
+--------
+
+本项目仅供学习与量化研究，不构成任何投资建议。回测结果不代表未来收益。
+证券市场有风险，入市需谨慎。

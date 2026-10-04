@@ -1,0 +1,41 @@
+# 通达信(eltdx)行情插件 —— 分钟K + 真实成交额
+#
+# 为什么需要它
+# ============
+# 现用的腾讯 mkline 有三个硬限制 (2026-09-28 实测):
+#   1. 单次最多约 482 根 bar => m1 只覆盖约 2 个交易日, 历史分时图基本看不到
+#   2. 不提供成交额 => amount 只能用 vol x 100 x close 估算
+#   3. 北交所无分钟数据
+# 而 eltdx (PyPI 包, 通达信 7709 协议) 同场景实测:
+#   - 1m 历史 22483 根 ≈ 94 个交易日 (2026-05-20 起)
+#   - **直接给 amount**, 与本地日K 对拍 ratio = 0.999999
+#   - 沪深 / 创业板 / 科创板 / 北交所 / 指数 / ETF 全覆盖
+#   - 批量 100 只/请求 ~0.66s, 全市场 5400 只约 15s
+#
+# 关键接口
+# ========
+#     cli.bars.get(codes, period="1m", count=240, anchor_date="2026-09-29")
+# 返回 {full_code: KlineSeries}, KlineBar 字段:
+#     time(tz-aware 北京) open/high/low/close volume_lots(手) amount(元)
+#
+# ⚠️ 三个必须记住的坑
+# ===================
+# 1. **不要用 all_pages=True**: 服务器在返回空页之前耗尽 max_pages 时会抛
+#    RuntimeError("bars.get reached max_pages before the server returned an
+#    empty page")。1m 有 2 万多根, 分页必然踩到。改用 anchor_date + count
+#    按天精确取窗口 (anchor 是窗口**末尾**)。
+# 2. **代码必须带市场前缀**: 裸 "510300" 会 ValueError(unable to infer
+#    market), 必须传 "sh510300" / "sz159915" / "bj920002"。
+# 3. **共享一个 client**: 每线程各建 TdxClient 实测 6 只 2.21s, 共享 client
+#    并发同样 6 只只要 0.07s (eltdx 内部是连接池 + RLock, 线程安全)。
+#
+# runtime: python —— 需要 pip 包 eltdx (见 requirements.txt)。
+
+name: eltdx
+display_name: "通达信行情(分钟K·实时快照·日线)"
+runtime: python
+entry: app.plugins.eltdx.provider:EltdxMinuteProvider
+check: app.plugins.eltdx.provider:availability
+datasets: [minute, realtime, daily]
+description: "通达信 7709 协议(eltdx 3.1.7)。分钟K 提供真实 OHLC 与真实成交额, 1m 历史约 94 个交易日(远超腾讯 mkline 的 2 天), 覆盖沪深/创业板/科创板/北交所/指数/ETF; 实测与本地日K对拍 volume ratio 1.0000 / amount ratio 0.999999。实时快照(quotes.get_snapshots) 80 只/批, 全市场约 2s, 含五档/内外盘/现手; 相比腾讯 qt 的关键优势是**没有科创板 688/689 vol 单位是股的板块差异**(分板块实测 amount/(vol*100)/close 均落在 0.99~1.03)。指数需按码单查(已声明 supports_index_realtime)。日线单次最多 800 根(上游硬限制, 长历史自动分段回补, 4 段即回到 2013 年), 100 只×800 根仅 0.65s; 分板块对拍与存量 tushare 日K 偏差均 ≤0.002%, 但⚠️**指数 volume 上游是「手」而存量是「股」, 已按 x100 对齐**(8 只指数实测比值 1.000000)。"
+install_hint: "需要 Python 包 eltdx==3.1.7(含 Rust 原生扩展, 支持 Python 3.10~3.14)。在设置页点击「安装」自动装进后端虚拟环境, 或手动执行: uv pip install --python <backend/.venv/Scripts/python.exe> eltdx==3.1.7。选中它作为「分钟数据源」即可; 无需 token, 但需要能访问通达信行情主站(7709 端口)。"

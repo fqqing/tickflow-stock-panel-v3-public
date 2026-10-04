@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>focus lab</title></head>
+<body style="margin:0;background:#fff">
+<div id="c" style="width:960px;height:420px"></div>
+<script src="../../frontend/node_modules/klinecharts/dist/umd/klinecharts.min.js"></script>
+<script>
+const KC = window.klinecharts
+const N = 300
+const data = []
+const t0 = Date.UTC(2025, 0, 1)
+for (let i = 0; i < N; i += 1) {
+  const base = 10 + (i % 40) * 0.1
+  data.push({
+    timestamp: t0 + i * 86400000,
+    open: base,
+    high: base + 0.5,
+    low: base - 0.5,
+    close: base + 0.2,
+    volume: 1000 + i,
+  })
+}
+const chart = KC.init(document.getElementById('c'))
+chart.setTimezone('Asia/Shanghai')
+chart.setDataLoader({
+  getBars: ({ type, callback }) => {
+    if (type === 'init') callback(data, { backward: false, forward: false })
+    else callback([], false)
+  },
+})
+chart.setSymbol({ ticker: 'TEST', pricePrecision: 2, volumePrecision: 0 })
+chart.setPeriod({ type: 'day', span: 1 })
+window.__chart = chart
+window.__dates = data.map(d => new Date(d.timestamp).toISOString().slice(0, 10))
+window.__N = N
+window.__ready = true
+</script>
+</body>
+</html>

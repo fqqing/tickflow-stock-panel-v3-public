@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tickflow 前端优化方案 · 个股终端重构</title>
+<style>
+:root{
+  --bg:#0A0A0B; --surface:#18181B; --elevated:#212126; --border:#353539;
+  --fg:#FAFAFA; --fg2:#C4C4CB; --muted:#8E8E96;
+  --accent:#3B82F6; --bull:#F04438; --bear:#12B76A; --warning:#F79009;
+  --mono:"JetBrains Mono","IBM Plex Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box;border-color:var(--border)}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font-family:"HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:15px;line-height:1.7;-webkit-font-smoothing:subpixel-antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:48px 24px 96px}
+h1{font-size:28px;font-weight:600;letter-spacing:-.01em;margin:0 0 8px}
+h2{font-size:20px;font-weight:600;margin:56px 0 16px;padding-top:20px;border-top:1px solid var(--border)}
+h3{font-size:16px;font-weight:600;margin:28px 0 10px}
+p{margin:10px 0}
+.lede{color:var(--fg2);font-size:16px;margin:0 0 4px}
+.meta{color:var(--muted);font-size:13px;font-family:var(--mono)}
+code{font-family:var(--mono);font-size:13px;background:var(--elevated);
+  padding:1px 5px;border-radius:4px;color:#CBD5E1}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.bull{color:var(--bull)}.bear{color:var(--bear)}.acc{color:var(--accent)}.warn{color:var(--warning)}
+
+.hero{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 28px 24px;margin:28px 0 8px}
+.hero .verdict{font-size:19px;font-weight:600;line-height:1.5;margin:0 0 14px}
+.hero .verdict em{font-style:normal;color:var(--accent)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:20px}
+.kpi{background:var(--elevated);border-radius:8px;padding:14px 16px}
+.kpi .l{font-size:12px;color:var(--muted)}
+.kpi .v{font-size:24px;font-weight:600;font-family:var(--mono);margin-top:2px}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 22px;margin:16px 0}
+.card.warnbox{border-color:rgba(240,68,56,.4);background:rgba(240,68,56,.05)}
+.card.okbox{border-color:rgba(18,183,106,.35);background:rgba(18,183,106,.05)}
+.card>h4{margin:0 0 8px;font-size:15px;font-weight:600}
+
+.tblwrap{overflow-x:auto;margin:14px 0;border:1px solid var(--border);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:640px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+th{background:var(--elevated);font-weight:600;color:var(--fg2);font-size:12.5px;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td.self{background:rgba(59,130,246,.07)}
+.tag{display:inline-block;font-size:11px;font-family:var(--mono);padding:1px 7px;border-radius:999px;border:1px solid var(--border);color:var(--fg2)}
+.tag.p0{border-color:rgba(240,68,56,.5);color:#FCA5A5}
+.tag.p1{border-color:rgba(247,144,9,.5);color:#FCD34D}
+.tag.p2{border-color:rgba(59,130,246,.5);color:#93C5FD}
+
+.timeline{position:relative;margin:20px 0 0;padding-left:26px}
+.timeline:before{content:"";position:absolute;left:6px;top:6px;bottom:6px;width:1px;background:var(--border)}
+.tl{position:relative;margin-bottom:22px}
+.tl:before{content:"";position:absolute;left:-24px;top:7px;width:11px;height:11px;border-radius:50%;background:var(--accent);border:2px solid var(--bg)}
+.tl .hd{font-size:15px;font-weight:600;margin:0 0 4px}
+.tl .sub{font-size:12.5px;color:var(--muted);font-family:var(--mono);margin:0 0 8px}
+.tl ul{margin:6px 0;padding-left:18px}
+.tl li{margin:4px 0;font-size:14px;color:var(--fg2)}
+.tl li b{color:var(--fg);font-weight:600}
+
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.mini{background:var(--elevated);border-radius:10px;padding:14px 16px}
+.mini h5{margin:0 0 6px;font-size:13.5px;font-weight:600}
+.mini p{margin:0;font-size:13.5px;color:var(--fg2)}
+
+.check{list-style:none;padding:0;margin:10px 0}
+.check li{padding-left:24px;position:relative;margin:6px 0;font-size:14px;color:var(--fg2)}
+.check li:before{content:"";position:absolute;left:4px;top:8px;width:9px;height:5px;
+  border-left:1.5px solid var(--bear);border-bottom:1.5px solid var(--bear);transform:rotate(-45deg)}
+.no li:before{border-color:var(--bull);transform:none;width:9px;height:9px;border:none;
+  background:none;content:"×";left:5px;top:0;font-size:15px;line-height:1.4;color:var(--bull)}
+
+pre{background:#0F0F11;border:1px solid var(--border);border-radius:10px;padding:14px 16px;
+  overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.65;color:#C8C8D0;margin:12px 0}
+pre .c{color:#6B7280}
+.foot{margin-top:56px;padding-top:20px;border-top:1px solid var(--border);color:var(--muted);font-size:12.5px}
+@media(max-width:640px){.wrap{padding:28px 16px 64px}h1{font-size:23px}h2{font-size:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>个股终端前端优化方案</h1>
+<p class="lede">从「弹窗看盘」升级为「全屏工作区」——容器、图表内核、信息层级三层重构</p>
+<p class="meta">2026-09-24 · 针对 tickflow-stock-panel v0.2.1 · 前端 React 18 + Vite + Tailwind</p>
+
+<div class="hero">
+  <p class="verdict">核心结论：问题不在配色和间距，在 <em>容器选错了</em>。弹窗天生做不出专业终端——屏宽只能用 57%，主图高度锁死 420px，控件只能往顶栏堆。先把容器换成全屏工作区，再谈其他。</p>
+  <p class="meta">真正的债务在图表内核：<code>EChartsCandlestick.tsx</code> 1718 行单体巨石，指标 / 缠论 / 手绘线 / 十字光标全耦合在一起。这是「每加一个功能都很痛」的根因，也是为什么它长得不像专业工具。</p>
+  <div class="kpis">
+    <div class="kpi"><div class="l">现状主图高度</div><div class="v">420<span style="font-size:13px;color:var(--muted)">px</span></div></div>
+    <div class="kpi"><div class="l">屏宽利用率</div><div class="v">57<span style="font-size:13px;color:var(--muted)">%</span></div></div>
+    <div class="kpi"><div class="l">图表组件行数</div><div class="v">1718</div></div>
+    <div class="kpi"><div class="l">并存图表库</div><div class="v">2<span style="font-size:13px;color:var(--muted)"> 套</span></div></div>
+  </div>
+</div>
+
+<h2>一、现状体检：7 个问题，按严重度排序</h2>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th style="width:32px">#</th><th>问题</th><th>证据（文件 · 位置）</th><th>后果</th><th style="width:88px">优先级</th></tr></thead>
+<tbody>
+<tr>
+  <td class="num">1</td>
+  <td><b>容器是弹窗而非工作区</b></td>
+  <td><code>StockPreviewDialog.tsx</code> · <code>w-[92vw] max-w-[1100px] max-h-[95vh]</code></td>
+  <td class="self">1920 屏只用 1100px；主图锁 420px；关掉即失上下文，无法与其他页面联动</td>
+  <td><span class="tag p0">P0</span></td>
+</tr>
+<tr>
+  <td class="num">2</td>
+  <td><b>图表内核是 1718 行巨石</b></td>
+  <td><code>EChartsCandlestick.tsx</code> 1718 行（占 components 总行数 25%）</td>
+  <td class="self">指标、缠论叠加、手绘线、十字光标全在一个组件里；加功能必须动巨石，改不动</td>
+  <td><span class="tag p1">P1</span></td>
+</tr>
+<tr>
+  <td class="num">3</td>
+  <td><b>两套图表库并存</b></td>
+  <td>依赖同时有 <code>echarts</code>(~330KB) 与 <code>lightweight-charts</code>(~45KB)；后者只用在 166 行的 <code>CandlestickChart.tsx</code></td>
+  <td class="self">bundle 浪费；主图与副图交互心智不一致；45KB 的专业库没被用起来</td>
+  <td><span class="tag p1">P1</span></td>
+</tr>
+<tr>
+  <td class="num">4</td>
+  <td><b>价格双源、数值不一致</b></td>
+  <td>顶栏 <span class="bull">35.04 / −2.87%</span> 与盘口 <span class="bull">34.80 / −2.74%</span> 同时显示</td>
+  <td class="self">用户不知道信哪个；没有快照时间，无法判断是不是延迟数据</td>
+  <td><span class="tag p0">P0</span></td>
+</tr>
+<tr>
+  <td class="num">5</td>
+  <td><b>顶栏控件过载</b></td>
+  <td>顶栏一行动作：4 个区间预设 + 2 个 DatePicker + 日K/分时 + 自选 + 监控 + 盘口 + 刷新 + 最大化 + 关闭</td>
+  <td class="self">控件数量比图表还抢眼；主次颠倒；小屏必然换行错位</td>
+  <td><span class="tag p0">P0</span></td>
+</tr>
+<tr>
+  <td class="num">6</td>
+  <td><b>上下文信息被弱化</b></td>
+  <td><code>triggerInfo</code> 与 <code>abRow</code>（异动）已有数据，但只渲染成弹窗内一条 10px 小字</td>
+  <td class="self">丢掉了本项目最独特的资产：「为什么来到这只股票」</td>
+  <td><span class="tag p2">P2</span></td>
+</tr>
+<tr>
+  <td class="num">7</td>
+  <td><b>字体用了 Inter</b></td>
+  <td><code>tailwind.config.ts</code> · <code>sans: ['Inter', ...]</code></td>
+  <td class="self">通用字体，无辨识度；中文靠系统 fallback，中英混排基线不齐</td>
+  <td><span class="tag p2">P2</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2>二、同类项目对比：该抄谁</h2>
+
+<p>选了 5 个参照对象——两个专业图表库（决定内核）、两个开源终端（决定容器形态）、一个商业标杆（决定信息层级）。</p>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th>维度</th><th class="self">tickflow 现状</th><th>KLineChart</th><th>Lightweight Charts</th><th>FreqUI</th><th>同花顺 / 通达信</th></tr></thead>
+<tbody>
+<tr><th>定位</th><td class="self">自研 A 股工作台</td><td>金融图表库</td><td>金融图表库</td><td>交易机器人控制台</td><td>商业终端</td></tr>
+<tr><th>图表内核</th><td class="self">ECharts + 自研 1718 行胶水</td><td>自研 Canvas</td><td>Canvas，TradingView 同源</td><td>lightweight-charts</td><td>自研</td></tr>
+<tr><th>内置指标</th><td class="self">手写（MACD/KDJ/BOLL/RSI 等）</td><td><b>60+ 开箱</b></td><td>无，需自算</td><td>无</td><td>50+</td></tr>
+<tr><th>画线工具</th><td class="self">自研 SVG 覆盖层</td><td><b>内置 20+</b></td><td>需自研</td><td>无</td><td>内置</td></tr>
+<tr><th>主副图窗格</th><td class="self">手写 grid 拼接</td><td><b>原生 pane</b></td><td>多实例手工对齐</td><td>无</td><td>原生</td></tr>
+<tr><th>容器形态</th><td class="self">1100px 弹窗</td><td>组件（不管容器）</td><td>组件</td><td><b>全屏仪表盘</b></td><td><b>全屏多窗格</b></td></tr>
+<tr><th>触发上下文</th><td class="self"><b>有数据但弱化</b></td><td>无</td><td>无</td><td>有（交易记录）</td><td>无</td></tr>
+<tr><th>中文生态</th><td class="self">原生</td><td><b>国产，中文文档</b></td><td>英文为主</td><td>英文</td><td>原生</td></tr>
+<tr><th>体积</th><td class="self">echarts 330KB+</td><td>~150KB</td><td><b>~45KB</b></td><td>—</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card okbox">
+<h4>结论：分头抄，别整套照搬</h4>
+<p><b>容器形态抄 FreqUI / OpenBB</b>——全屏工作台，不是弹窗。这是投入产出比最高的一步。</p>
+<p><b>图表内核抄 KLineChart</b>，而不是 Lightweight Charts。理由：LWC 虽然只有 45KB，但它<b>不管指标、不管画线、不管副图</b>——这三个恰好是你现在 1718 行胶水在干的事，换过去等于把胶水原样搬一遍。KLineChart 原生提供 60+ 指标、20+ 画线工具、主副图窗格，还有自定义 indicator / overlay API，缠论和定量结构可以直接注册进去。中文文档也是实打实的优势。</p>
+<p><b>信息层级抄商业终端</b>——顶栏只放「我是谁 + 现在多少钱 + 什么时间的价」，其余全部下沉。</p>
+</div>
+
+<h2>三、目标架构</h2>
+
+<h3>3.1 容器：从弹窗到独立路由</h3>
+<p>新增 <code>/stock/:symbol</code> 路由，渲染全屏 <code>StockTerminal</code>。原 <code>StockPreviewDialog</code> 降级为「快速预览」轻量版（保留给监控列表快速扫一眼用），两者共用同一套子组件。</p>
+
+<pre><span class="c">// router.tsx —— 新增</span>
+{ path: 'stock/:symbol', element: &lt;StockTerminal /&gt; }
+
+<span class="c">// StockTerminal.tsx —— 全屏工作区骨架</span>
+&lt;div className="flex h-screen flex-col"&gt;
+  &lt;TerminalHeader symbol={symbol} /&gt;          <span class="c">// 标识 + 唯一价格 + 快照时间 + ⋯ 溢出菜单</span>
+  &lt;ContextRibbon source={triggerInfo ?? abRow} /&gt;  <span class="c">// 触发上下文条 · 差异化记忆点</span>
+  &lt;div className="flex flex-1 min-h-0"&gt;
+    &lt;WatchlistRail className="w-56" /&gt;          <span class="c">// 左栏 自选 · 可折叠</span>
+    &lt;main className="flex-1 min-w-0"&gt;
+      &lt;ChartToolbar /&gt;                          <span class="c">// 周期 复权 画线 指标 · 下沉</span>
+      &lt;KLinePro className="flex-1" /&gt;           <span class="c">// 主图 + 副图 · 高度自适应</span>
+    &lt;/main&gt;
+    &lt;aside className="w-[180px]"&gt;
+      &lt;DepthPanel /&gt;                            <span class="c">// 盘口 · 三层级</span>
+      &lt;NewsFeed /&gt;                              <span class="c">// 资讯 · 可折叠</span>
+    &lt;/aside&gt;
+  &lt;/div&gt;
+&lt;/div&gt;</pre>
+
+<h3>3.2 价格：单一数据源</h3>
+<p>把 quote 提升到工作区顶层一次拉取，顶栏、信息条、盘口全部消费同一份数据，并统一显示快照时间。这一条能直接消掉「35.04 vs 34.80」的信任危机。</p>
+
+<pre><span class="c">// 顶层拉一次, 全工作区共享</span>
+const { data: quote } = useQuery({ queryKey: QK.quote(symbol), refetchInterval: 3000 })
+
+<span class="c">// 顶栏 —— 唯一的权威价格</span>
+&lt;span className="num text-2xl"&gt;{quote.price}&lt;/span&gt;
+&lt;span className="num text-xs text-muted"&gt;快照 {fmtTime(quote.ts)}&lt;/span&gt;</pre>
+
+<h3>3.3 图表工具条：下沉</h3>
+<p>周期 / 复权 / 画线 / 指标已经在 <code>StockDailyKChart</code> 里了，把顶栏的区间预设和 DatePicker 也一并移下去，让工具条成为图表的「第一道边框」而不是悬浮层。</p>
+
+<h2>四、三阶段实施路线</h2>
+
+<div class="timeline">
+  <div class="tl">
+    <p class="hd">P0 · 止血：换容器、统一价格、控件归位</p>
+    <p class="sub">2–3 天 · 不动图表内核 · 风险最低</p>
+    <ul>
+      <li><b>新增 <code>/stock/:symbol</code> 全屏路由</b>，<code>StockTerminal.tsx</code>；<code>StockPreviewDialog</code> 保留为快速预览</li>
+      <li><b>顶栏分层</b>：主行只留 标识 + 价格 + 快照时间；区间预设、监控、最大化、刷新收进 <code>⋯</code> 溢出菜单</li>
+      <li><b>价格单一源</b>：quote 提升到顶层，顶栏 / InfoBar / DepthPanel 共用，统一带快照时间</li>
+      <li><b>盘口 220 → 180px</b>，信息分三层级（现价大字号 / 涨跌停色块 / 次要字段 11px 折叠）</li>
+      <li><b>区间预设 + DatePicker 下沉</b>到图表工具条</li>
+    </ul>
+    <p class="meta">验收：全屏打开后主图高度 ≥ 视口 60%；整屏价格数字唯一；1920 屏下主图宽度 ≥ 1000px</p>
+  </div>
+
+  <div class="tl">
+    <p class="hd">P1 · 换内核：ECharts → KLineChart</p>
+    <p class="sub">1.5–2 周 · 收益最大 · 也是唯一的真风险</p>
+    <ul>
+      <li><b>引入 <code>klinecharts</code></b>，新建 <code>KLinePro.tsx</code>：主图 + 副图窗格 + 60+ 内置指标 + 内置画线</li>
+      <li><b>缠论 / 定量结构</b>注册为自定义 indicator + overlay（KLineChart 有官方扩展 API，不必再手写 SVG 覆盖层）</li>
+      <li><b>双轨灰度</b>：<code>EChartsCandlestick</code> 保留为 legacy，按 symbol hash 分流，异常可一键回退</li>
+      <li>迁移完成后<b>删除 <code>EChartsCandlestick.tsx</code></b>（1718 行 → 目标 ~400 行）</li>
+      <li>确认不再需要 <code>echarts</code> 后从依赖移除，bundle 预计减少 180KB+</li>
+    </ul>
+    <p class="meta">验收：日 K / 周月 / 5m~120m 全部走新内核；指标数量 ≥ 现有；缠论叠加与现状逐根对齐（对拍脚本已有可复用）</p>
+  </div>
+
+  <div class="tl">
+    <p class="hd">P2 · 终端形态：多窗格 + 键盘优先 + 响应式</p>
+    <p class="sub">2–3 周 · 依赖 P0/P1 完成</p>
+    <ul>
+      <li><b>三栏工作区可折叠</b>，布局偏好写入 localStorage（左栏 / 右栏独立记忆）</li>
+      <li><b>键盘优先</b>：<code>/</code> 聚焦搜索、<code>1..9</code> 切周期、<code>Esc</code> 关闭、<code>← →</code> 切上一只 / 下一只</li>
+      <li><b>图表联动</b>：左栏选股 → 主图 / 盘口 / 资讯同步切换，无需刷新</li>
+      <li><b>响应式</b>：≥1440 三栏 / 1024–1440 两栏（右栏折叠为抽屉）/ &lt;1024 单栏（图表全宽，盘口抽屉）</li>
+    </ul>
+    <p class="meta">验收：纯键盘可完成「搜索 → 看 K → 切周期 → 换股」全流程；1280 屏无横向滚动</p>
+  </div>
+</div>
+
+<h2>五、设计系统：在现有 §6.0 上演进，不推翻</h2>
+
+<p>现有 CSS 变量体系（<code>--base / --surface / --elevated / --border / --bull / --bear / --accent</code>）结构是对的，保留。只做三处修补。</p>
+
+<div class="grid2">
+  <div class="mini">
+    <h5>字体：换掉 Inter</h5>
+    <p>正文 / UI 改用 <b>IBM Plex Sans SC</b>——中英同源、字重齐全、与数字搭配稳定，比 Inter 有辨识度，也不是烂大街的默认字体。价格 / 代码沿用已有的 <b>JetBrains Mono</b>。中英混排基线不齐的问题会一并解决。</p>
+  </div>
+  <div class="mini">
+    <h5>排版：三档价格阶梯</h5>
+    <p>顶栏主价格 <b>24–28px / 600</b>（一眼看到），盘口现价 <b>18px</b>，表格内价格 <b>13px mono + tabular-nums</b>。正文页 ≥16px，终端密集区可到 13px 下限。行高 1.6。</p>
+  </div>
+  <div class="mini">
+    <h5>色彩：70-20-10 分配</h5>
+    <p>中性（base/surface/border）占 70%，语义红绿只用于价格与 K 线占 20%，强调蓝只用于「当前激活状态」占 10%。现在红绿有溢出到 UI 状态的倾向，收回来。新增 <code>--bull-dim / --bear-dim</code> 供副图量柱使用。</p>
+  </div>
+  <div class="mini">
+    <h5>动效：克制</h5>
+    <p>切股用 120ms 淡入，<b>不要</b> scale + blur（看盘时晃动干扰读数）。全部动效包在 <code>@media (prefers-reduced-motion: no-preference)</code> 内。</p>
+  </div>
+</div>
+
+<h3>无障碍与响应式硬指标</h3>
+<ul class="check">
+  <li>所有图标按钮补 <code>focus-visible:ring-1 ring-accent</code>——现有顶栏图标按钮无可见焦点态</li>
+  <li>图标按钮命中区 ≥32px、间距 ≥8px（终端密集区的合理下限；非密集区仍按 44px）</li>
+  <li>暗色下 <code>--fg-muted</code> (#8E8E96 on #18181B) 对比度约 5.6:1，正文合规；UI 边界 <code>--border</code> 需 ≥3:1，当前 #353539 偏暗，建议提到 #3F3F45</li>
+  <li>表格在 &lt;1024 转为卡片视图；侧栏转抽屉</li>
+</ul>
+
+<h2>六、记忆点：把「为什么来这里」做成主视觉</h2>
+
+<div class="card warnbox">
+<h4>这是本项目唯一能吊打商业终端的地方</h4>
+<p>同花顺、通达信、TradingView 都只告诉你「这只股票现在多少钱」，<b>不告诉你「你为什么打开它」</b>。而 tickflow 是从自选、监控、异动扫描、选股结果跳进来的——<code>triggerInfo</code> 和 <code>abRow</code> 里已经躺着触发原因、触发时间、触发价位、信号标签，只是被渲染成一条 10px 小字塞在顶栏下面。</p>
+<p>做法：把这条升级成图表上方独立的<b>上下文条（context ribbon）</b>——显示触发来源（监控规则名 / 异动窗口 / 选股策略）、触发时间、触发价位，<b>并在主图上画一条对应价位线</b>，右侧给一个「回到来源」链接。用户一眼就知道自己为什么在这，以及该看哪个价位。</p>
+<p>这个功能数据现成、改动约 150 行、但辨识度极高——建议放在 <b>P0 一起做</b>，不要等到 P2。</p>
+</div>
+
+<h2>七、立即可执行的第一批改动</h2>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th>文件</th><th>动作</th><th style="width:80px">阶段</th></tr></thead>
+<tbody>
+<tr><td><code>frontend/src/pages/StockTerminal.tsx</code></td><td>新建 · 全屏工作区容器</td><td><span class="tag p0">P0</span></td></tr>
+<tr><td><code>frontend/src/router.tsx</code></td><td>新增 <code>/stock/:symbol</code></td><td><span class="tag p0">P0</span></td></tr>
+<tr><td><code>frontend/src/components/StockPreviewDialog.tsx</code></td><td>精简为快速预览；顶栏动作收进溢出菜单；区间控件下沉</td><td><span class="tag p0">P0</span></td></tr>
+<tr><td><code>frontend/src/lib/api.ts</code> + <code>queryKeys.ts</code></td><td>新增 <code>useQuote</code> 单一价格源</td><td><span class="tag p0">P0</span></td></tr>
+<tr><td><code>frontend/src/components/DepthPanel.tsx</code></td><td>220 → 180px，信息三层级</td><td><span class="tag p0">P0</span></td></tr>
+<tr><td><code>frontend/src/components/stock-terminal/ContextRibbon.tsx</code></td><td>新建 · 触发上下文条 + 价位线</td><td><span class="tag p0">P0</span></td></tr>
+<tr><td><code>frontend/package.json</code></td><td>加 <code>klinecharts</code>；P1 完成后移除 <code>echarts</code></td><td><span class="tag p1">P1</span></td></tr>
+<tr><td><code>frontend/src/components/KLinePro.tsx</code></td><td>新建 · 替换 EChartsCandlestick</td><td><span class="tag p1">P1</span></td></tr>
+<tr><td><code>frontend/tailwind.config.ts</code></td><td>sans 首选项 Inter → IBM Plex Sans SC</td><td><span class="tag p2">P2</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>八、明确不做的事</h2>
+<ul class="check no">
+  <li>不做 TradingView 那种 20+ 画线工具——先做 4 种（水平线 / 趋势线 / 矩形 / 价格标注），够用为止</li>
+  <li>不做多股同屏对比图——性价比低，且分走主图空间</li>
+  <li>不做移动端原生适配——看盘场景以桌面为主，移动端只保证「能看、不横向滚动」</li>
+  <li>P1 不一次性替换全部图表——先日 K，验证通过再动分时</li>
+</ul>
+
+<div class="card">
+<h4>最大的风险</h4>
+<p>P1 换内核时，<b>缠论叠加层要整个重做</b>——这是全项目最大的不确定项。建议：P1 开工前先用 KLineChart 的 overlay API 做一个缠论笔 / 中枢的最小验证（1 天），跑通再全面迁移。如果验证不通过，退回「ECharts 保留 + 只做 P0 和 P2」也是可接受的结果。</p>
+</div>
+
+<div class="foot">
+tickflow-stock-panel · 前端优化方案 v1 · 2026-09-24<br>
+参照对象：KLineChart（klinecharts）、Lightweight Charts（TradingView）、FreqUI（freqtrade）、OpenBB Workspace、同花顺 PC 客户端
+</div>
+
+</div>
+</body>
+</html>

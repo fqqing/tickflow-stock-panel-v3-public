@@ -1,0 +1,103 @@
+# 测试与构建门禁
+#
+# 为什么需要这个工作流: 仓库原先只有 docker.yml(构建镜像)和 release.yml,
+# 没有任何跑测试的 CI。后端 770+ 个测试只在开发者本机运行, 推上来不会被
+# 自动验证 —— 多市场扩展就曾因测试替身未同步 market 参数而静默红了 7 个用例。
+#
+# 触发: push 到 main、所有 PR、手动。纯文档改动不触发(与 docker.yml 保持一致)。
+name: Tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'screenshots/**'
+      - 'LICENSE'
+      - 'NOTICE'
+  pull_request:
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'screenshots/**'
+      - 'LICENSE'
+      - 'NOTICE'
+  workflow_dispatch:
+
+# 同一分支的新 push 取消旧的在跑任务, 省 Actions 额度。
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest + ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      # 与 Dockerfile 的 runtime 阶段保持一致(python:3.11-slim)。
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # --frozen: 严格按 uv.lock 安装, 与 Docker 构建一致, 避免 CI 悄悄解析出新版本。
+      # backtest extra 引入 vectorbt(较重), 但本地验证的 773 passed 是在带该 extra
+      # 的环境下取得的, 这里保持一致而不是为了省时间去赌哪些测试不需要它。
+      - name: Sync dependencies
+        run: uv sync --frozen --extra dev --extra backtest
+
+      # 门禁: 测试必须全绿。
+      - name: Run tests
+        run: uv run pytest -q
+
+      # 非门禁: 上游遗留约 1200 个 ruff 告警(基线 9b9538a 即存在), 现在无法整仓
+      # 强制通过。此步只做可见性 —— 若为它加 continue-on-error 之外的门禁,
+      # CI 会从第一天起就是红的, 反而训练所有人忽略 CI。
+      # CONTRIBUTING §240 的真实要求是"本次改动不得引入新告警", 属于人工复审范畴。
+      - name: Lint (advisory, not gating)
+        continue-on-error: true
+        run: uv run ruff check app tests
+
+  frontend:
+    name: Frontend (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本取自 frontend/package.json 的 packageManager 字段(pnpm@9.10.0)。
+      # 必须显式指定 package_json_file: 本项目 package.json 在 frontend/ 子目录,
+      # 而 defaults.run.working-directory 只作用于 run 步骤, 不影响 uses 动作 ——
+      # 该动作默认在仓库根目录找 packageManager, 找不到会直接失败。
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+
+      # 与 Dockerfile 的 frontend-builder 阶段保持一致(node:20)。
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 门禁: pnpm build 含 tsc -b 类型检查 + vite 生产构建。
+      # CONTRIBUTING §241 要求任何 TS/组件/样式/API 类型改动至少跑一次。
+      - name: Build
+        run: pnpm build

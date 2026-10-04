@@ -1,0 +1,81 @@
+name: Build and Push Docker Image
+
+# 触发:
+#   - push 到 main: 覆盖刷新 :latest + :sha(每次提交可追溯)
+#   - 打 v* tag:    额外产出带版本号的镜像(如 :v0.1.43), 便于固定回溯
+#   - 手动:         网页 Actions → Run workflow
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    # 纯文档/图片改动不触发重建(双架构构建约 12 分钟, 不值得为改一行 README 跑一次)。
+    #
+    # 注意: 这里只能用根目录锚定的 *.md, 绝不能写 '**.md' ——
+    # backend/app/strategy/prompts/*.md 是 AI 策略生成实际读取的 prompt,
+    # 会被 COPY backend/app 打进镜像, 若被忽略则镜像内 prompt 会静默变旧。
+    # (glob 中 * 不匹配 /, 故 *.md 仅匹配根目录的 md 文件。)
+    #
+    # 另: 路径过滤对 tag 推送不生效(actions/runner#3933), 因此 v* 版本发布
+    # 仍会照常构建, 不受本过滤影响。
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'screenshots/**'
+      - 'LICENSE'
+      - 'NOTICE'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=
+            type=ref,event=tag
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          # GitHub runner 在海外, 关掉国内镜像源(USE_CN_MIRROR=0)
+          # 让构建直连官方 npm/PyPI, 反而更快更稳;
+          # 本地/国内手动 docker build 仍走 Dockerfile 默认的 CN 镜像。
+          build-args: |
+            USE_CN_MIRROR=0
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

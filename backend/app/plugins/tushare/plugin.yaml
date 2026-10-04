@@ -1,0 +1,19 @@
+# Tushare Pro 数据源插件
+#
+# 覆盖面板里「日线 + 基本面」这条稳定链路: 标的维表 / 日线(不复权) / 复权因子 / 财务三表。
+# 走 Tushare 官方 HTTP API (POST https://api.tushare.pro), 不依赖 tushare pip 包 ——
+# 与 plugins/em_xdxr 一样零额外依赖 (只用项目已有的 httpx)。
+#
+# 不覆盖 (Tushare 需单独付费, 不在积分体系内): 分钟线 / 港美股 / Level-2 / 五档 / WebSocket。
+# 这些仍由 stock-sdk 或自定义 HTTP 源承担。
+#
+# token: 在项目根 .env 写 TUSHARE_TOKEN=<你的 token> (已 gitignore), 重启后端生效。
+
+name: tushare
+display_name: "Tushare Pro"
+runtime: none
+entry: app.plugins.tushare.provider:TushareProvider
+check: app.plugins.tushare.provider:availability
+datasets: [instruments, daily, adj_factor, financial]
+description: "Tushare Pro 官方接口: A股标的维表(含涨跌停价) / 日线(不复权, 含ETF与指数) / 复权因子(累积转稀疏倍率) / 财务三表+核心指标。量纲已归一化到面板内部口径(成交额千元→元、股本万股→股)。2000 积分档即可用; 分钟线/实时/五档需 Tushare 单独付费, 不在本插件范围。"
+install_hint: "在项目根 .env 写入 TUSHARE_TOKEN=<你的 token> 后重启后端。无需安装任何依赖。"

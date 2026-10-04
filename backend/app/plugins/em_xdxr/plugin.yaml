@@ -1,0 +1,16 @@
+# 东财除权事件数据源插件 (只提供 adj_factor 数据集)
+#
+# 为什么单独做一个插件: 面板的复权链路要求 adj_factor 是「每次除权事件一个稀疏倍率」
+# (indicators/pipeline.py::_apply_adj_factor), 而 stock-sdk 的 adj op 给的是逐日累积比值。
+# 本插件从东财分红送配明细 (RPT_SHAREBONUS_DET) 取除权事件, 用通达信/交易师的乘法前复权
+# 公式算出稀疏倍率, 与用户侧选股工具 (qushiqinlong) 口径一致。
+#
+# runtime: none —— 纯 Python + httpx(项目已有依赖), 无需额外安装。
+
+name: em_xdxr
+display_name: "东财除权事件(乘法前复权因子)"
+runtime: none
+entry: app.plugins.em_xdxr.provider:EmXdxrAdjProvider
+datasets: [adj_factor]
+description: "从东财分红送配明细取除权事件, 按通达信乘法前复权口径生成稀疏复权因子。只提供 adj_factor 数据集, 日K 仍由日K数据源提供。与 qushiqinlong 选股工具口径一致(实测 244 个交易日误差 0.000%)。"
+install_hint: "无需安装依赖。选中它作为「除权因子数据源」即可; 需已有本地日K数据用于推导倍率。"

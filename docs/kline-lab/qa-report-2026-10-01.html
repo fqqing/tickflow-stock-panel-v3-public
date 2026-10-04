@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>个股终端 · 前端功能测试报告 2026-10-01</title>
+<style>
+  :root{
+    --bg:#0f1115; --surface:#171a21; --elevated:#1f232c; --border:#2a2f3a;
+    --fg:#e8eaf0; --fg2:#9aa3b2; --muted:#6b7382;
+    --sev-high:#f04438; --sev-mid:#f79009; --sev-low:#667085; --fixed:#12b76a;
+    --accent:#3b82f6;
+    --mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.65 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 20px 72px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--fg2);font-size:13px;margin-bottom:26px}
+  h2{font-size:16px;margin:34px 0 14px;padding-left:10px;border-left:3px solid var(--accent)}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+  .stat .n{font:600 26px/1.2 var(--mono)}
+  .stat .l{color:var(--fg2);font-size:12px;margin-top:2px}
+  .badge{display:inline-block;font:600 11px/1 var(--mono);padding:3px 7px;border-radius:5px;white-space:nowrap}
+  .b-high{background:rgba(240,68,56,.16);color:#ff8b82;border:1px solid rgba(240,68,56,.35)}
+  .b-mid{background:rgba(247,144,9,.15);color:#ffc46b;border:1px solid rgba(247,144,9,.35)}
+  .b-low{background:rgba(102,112,133,.18);color:#aeb6c4;border:1px solid rgba(102,112,133,.4)}
+  .b-fix{background:rgba(18,183,106,.15);color:#5fdca2;border:1px solid rgba(18,183,106,.35)}
+  .b-ok{background:rgba(59,130,246,.15);color:#8ab4ff;border:1px solid rgba(59,130,246,.35)}
+  .issue{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:12px}
+  .issue.high{border-left:3px solid var(--sev-high)}
+  .issue.mid{border-left:3px solid var(--sev-mid)}
+  .issue.low{border-left:3px solid var(--sev-low)}
+  .issue.fix{border-left:3px solid var(--fixed)}
+  .issue h3{margin:0 0 8px;font-size:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .issue dl{margin:8px 0 0;display:grid;grid-template-columns:76px 1fr;gap:4px 10px;font-size:13px}
+  .issue dt{color:var(--muted);font-size:12px;padding-top:1px}
+  .issue dd{margin:0;color:var(--fg)}
+  code{font-family:var(--mono);font-size:12px;background:var(--elevated);padding:1px 5px;border-radius:4px;color:#c9d3e4}
+  pre{background:var(--elevated);border:1px solid var(--border);border-radius:8px;padding:10px 12px;overflow:auto;
+    font-family:var(--mono);font-size:12px;color:#c9d3e4;margin:8px 0 0}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+  th{color:var(--fg2);font-weight:500;font-size:12px}
+  td.num{font-family:var(--mono)}
+  .ok{color:#5fdca2}.no{color:#ff8b82}
+  .note{color:var(--fg2);font-size:12.5px}
+  @media(max-width:620px){
+    .issue dl{grid-template-columns:1fr}
+    .issue dt{font-size:11px;color:var(--muted)}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>个股终端 · 前端功能测试报告</h1>
+  <div class="sub">2026-10-01 · 真机运行（Edge headless + CDP，零 mock，打真实后端 3018）· 标的覆盖 7 个市场</div>
+
+  <div class="grid">
+    <div class="stat"><div class="n">36</div><div class="l">通过用例</div></div>
+    <div class="stat"><div class="n" style="color:#5fdca2">6</div><div class="l">发现并已修复缺陷</div></div>
+    <div class="stat"><div class="n" style="color:#ffc46b">4</div><div class="l">待你决策的改进项</div></div>
+    <div class="stat"><div class="n" style="color:#ff8b82">2</div><div class="l">高危（白屏级）</div></div>
+  </div>
+
+  <h2>一句话结论</h2>
+  <div class="card">
+    <p style="margin:0 0 10px">
+      <b>功能本身是好的</b>：两个内核的周期切换、主副图指标、缠论叠加、时间轴定位、快捷键、主题、响应式
+      在真机上全部工作，7 个市场标的里有 5 个完全正常。
+    </p>
+    <p style="margin:0">
+      <b>但容错层很薄</b> —— 表现最好的三项全是"出错之后怎么办"：一次图表重建会让整个终端页白屏；
+      港美股和写错的代码会永远显示"载入中"；盘口取不到时会反复弹红条。
+      换句话说：<b>正常路径没问题，异常路径会暴露给用户</b>。这 6 项已修，剩下 4 项涉及产品取舍，等你拍板。
+    </p>
+  </div>
+
+  <h2>测试范围与方法</h2>
+  <div class="grid">
+    <div class="card">
+      <b>双内核功能</b>
+      <div class="note">ECharts 20 项 + KLinePro 15 项：周期档（日/周/月/分钟）、复权、主图指标、副图指标、
+      指标管理面板、缠论笔/中枢、定量结构、信号/触发/回测叠加、事件时间轴与点击定位、6 个快捷键、三档响应式。</div>
+    </div>
+    <div class="card">
+      <b>边界与健壮性</b>
+      <div class="note">深主板 / 沪主板 / 科创 / 创业 / 北交所 / 港股 / 美股 七个标的；
+      无效代码；连续切内核 6 次；连续换股 5 次；亮暗主题；键盘可达性与 aria。</div>
+    </div>
+    <div class="card">
+      <b>方法要点</b>
+      <div class="note">断言不只看"有没有报错"，还看<b>画面是否真的变了</b>（canvas 内容指纹）与
+      <b>是否真的画了东西</b>（像素油墨占比）。导航后校验落地标的，避免跑错页面得出假结论。</div>
+    </div>
+  </div>
+
+  <h2>已修复缺陷（6）</h2>
+
+  <div class="issue fix">
+    <h3><span class="badge b-high">严重</span> 图表重建时整个终端页白屏 <span class="badge b-fix">已修</span></h3>
+    <dl>
+      <dt>现象</dt><dd>个股终端页静置几秒后，整页被替换成一段红色堆栈——侧栏、顶栏、图表全部消失，只能手动刷新。<code>Cannot read properties of null (reading 'on')</code></dd>
+      <dt>复现</dt><dd>100% 可复现，且触发条件与"页面高度变化"绑定：窗口高度剧变、开关开发者工具、缩放页面都会命中。普通窗口宽度拖拽不触发。</dd>
+      <dt>根因</dt><dd><code>StockDailyKChart.tsx</code> 的画线 effect 里只守了 <code>chart</code>，没守 <code>chart.getZr()</code> 的返回值。echarts 5.6.0 的 <code>dispose()</code> 会把实例内部的 <code>_zr</code> 置为 null，在"旧实例已销毁、新实例还没写回 state"的窗口期里就是 null，挂监听立刻抛错。</dd>
+      <dt>修复</dt><dd>补 <code>if (!zr) return</code> 守卫（并写清了为什么必须守）。</dd>
+      <dt>验证</dt><dd>同一复现路径下 3 次截图全部通过，异常数 0。</dd>
+    </dl>
+    <pre>// frontend/src/components/StockDailyKChart.tsx
+const zr = chart.getZr()
+// ★ chartInst 可能是已 dispose 的实例: echarts 5.6.0 的 dispose() 会把 _zr 置 null
+if (!zr) return</pre>
+  </div>
+
+  <div class="issue fix">
+    <h3><span class="badge b-high">严重</span> 任何渲染异常都会整页白屏，没有出口 <span class="badge b-fix">已修</span></h3>
+    <dl>
+      <dt>现象</dt><dd>上面那条崩溃之所以"致命"，是因为 React Router 用了内置错误页：整屏只剩堆栈，连"返回"按钮都没有，用户唯一出路是刷新。</dd>
+      <dt>修复</dt><dd>新增路由级兜底页（错误摘要 + 重新加载 + 回首页），挂在根路由上由所有子路由继承。今后单页出错不再拖垮整个应用。</dd>
+    </dl>
+  </div>
+
+  <div class="issue fix">
+    <h3><span class="badge b-mid">中</span> 按 Esc 被退回上一只股票 <span class="badge b-fix">已修</span></h3>
+    <dl>
+      <dt>现象</dt><dd>在 KLinePro 里打开"指标"面板，按 Esc 想关面板 —— 结果被送回上一只股票。面板纹丝不动地留着，页面已经换了标的。</dd>
+      <dt>根因</dt><dd><code>StockTerminal.tsx</code> 的 Esc 分支是 <code>navigate(-1)</code>；而"关闭浮层"的白名单只包含命令面板/帮助/监控设置，指标面板不在其中，于是 Esc 直接落到"后退"。</dd>
+      <dt>修复</dt><dd>面板根节点加 <code>data-overlay-panel</code> 标记并自己接管 Esc（关闭自己）；终端层看到该标记就让路、不后退。语义回到"Esc = 关掉当前浮层"。</dd>
+      <dt>副作用</dt><dd>无标记时 Esc 仍然保留"返回上一页"的原行为。</dd>
+    </dl>
+  </div>
+
+  <div class="issue fix">
+    <h3><span class="badge b-mid">中</span> 港股/美股顶栏永远"载入中…" <span class="badge b-fix">已修</span></h3>
+    <dl>
+      <dt>现象</dt><dd>00700.HK 主图渲染完全正常，但顶栏价格永远是 <code>—</code> 且状态挂"载入中…"，盘口面板同步转圈。实测 12 秒持续不变。</dd>
+      <dt>根因</dt><dd>港美股没有五档盘口，<code>/api/depth</code> 返回 404。react-query v5 在"无数据 + 定期轮询"下会把查询周期性带回 pending，于是 <code>isLoading</code> 长期为真——那句早就写好的兜底文案"盘口不可用 · 以图表为准"永远没机会显示。<b>不是没做降级，是降级被"加载中"盖住了。</b></dd>
+      <dt>修复</dt><dd>用 <code>failureCount</code> 记住"失败过"：一旦失败就不再声称加载中。顶栏与盘口面板同一口径。现在 4 秒内落到稳定降级态。</dd>
+    </dl>
+  </div>
+
+  <div class="issue fix">
+    <h3><span class="badge b-mid">中</span> 盘口取不到时红色 toast 刷屏 <span class="badge b-fix">已修</span></h3>
+    <dl>
+      <dt>现象</dt><dd>无效代码/港美股页面上，右下角反复弹出"未获取到 XXX 的盘口数据"，实测 12 秒弹 3 条。</dd>
+      <dt>根因</dt><dd>API 层的统一错误处理对<b>每个</b>非 2xx 响应都弹 toast。这对一次性操作是对的，对 6 秒一轮的盘口轮询就是刷屏。</dd>
+      <dt>修复</dt><dd>盘口请求改为静默（<code>quiet: true</code>）——UI 已有文案表达"不可用"，不需要再弹。验证后 toast 数为 0。</dd>
+    </dl>
+  </div>
+
+  <div class="issue fix">
+    <h3><span class="badge b-low">低</span> 既有验收脚本"假绿" <span class="badge b-fix">已修</span></h3>
+    <dl>
+      <dt>现象</dt><dd><code>run-terminal-check.mjs</code> 一直是 PASS，但它连"当前跑在哪个内核上"都没锁定过。</dd>
+      <dt>根因</dt><dd>脚本写入的 localStorage 键是 <code>tickflow-kline-pro</code>，而代码实际读的是 <code>tickflow.useKLinePro</code> —— 那个键没有任何代码读取，"锁定从 ECharts 开始"从未生效，测试实际跑在哪个内核完全取决于上一次残留。另外它注释里的 T3 从未实现，等待条件还会被无关文本提前满足。</dd>
+      <dt>修复</dt><dd>键名修正为真实键；新增正式测试套件（见下），断言全部改为"落地校验 + 画面指纹 + 像素油墨"。</dd>
+    </dl>
+  </div>
+
+  <h2>待你决策（4）</h2>
+
+  <div class="issue mid">
+    <h3><span class="badge b-mid">中</span> ECharts 内核没有指标管理入口</h3>
+    <dl>
+      <dt>现状</dt><dd>KLinePro 侧有完整的指标面板（<b>27 个</b>内置指标可加、可改参数、可删）；ECharts 侧顶栏根本没有"指标"按钮，写死 MA + BOLL + 定量结构 + 成交量，用户无法换成 MACD/KDJ 副图。</dd>
+      <dt>影响</dt><dd>这正是你最初说的"切换两个看板割裂"里最实的一块——不是观感，是<b>能力不对等</b>。切到 ECharts 就失去了配指标的能力。</dd>
+      <dt>建议</dt><dd>两条路：① 给 ECharts 侧补同款指标面板（工作量大，ECharts 的副图都是手写 series）；② 明确 ECharts 定位为"轻量/兼容内核"、KLinePro 为"主内核"，在能力矩阵里把这条差异显式化并在 UI 上提示。我倾向 ②，成本低且诚实。</dd>
+    </dl>
+  </div>
+
+  <div class="issue mid">
+    <h3><span class="badge b-mid">中</span> 无效标的时 K 线区是一片纯空白</h3>
+    <dl>
+      <dt>现状</dt><dd>访问不存在的代码时，顶栏和盘口现在会正确显示"不可用"，但 K 线区域是一个没有任何文字的灰底空框（KLinePro 内核下会显示"暂无该周期数据"，ECharts 内核下什么都没有）。</dd>
+      <dt>建议</dt><dd>补一个统一空态："未找到该标的的数据" + 一句原因提示。改动落在渲染分支，回归面中等，建议单独一次提交。</dd>
+    </dl>
+  </div>
+
+  <div class="issue mid">
+    <h3><span class="badge b-mid">中</span> 裸代码进入终端会静默全空</h3>
+    <dl>
+      <dt>现状</dt><dd>手工把地址改成 <code>/stock/000001</code>（不带 <code>.SZ</code>）时，后端返回 <b>200 + 空数组</b>，前端因此把它当成"这只票没数据"，页面全空且没有任何错误提示。</dd>
+      <dt>根源</dt><dd>三处叠在一起：前端直接把路由参数当代码用、不补市场后缀；后端推导不出市场时静默返回空；盘口则返回 404。同一个问题三种表现。</dd>
+      <dt>建议</dt><dd>前端按代码前缀补后缀（6/9→SH，0/2/3→SZ，4/8/92→BJ），匹配不到再提示"代码格式有误"。这是纯前端、低风险的改法。站内入口都带后缀，所以只影响手工输入。</dd>
+    </dl>
+  </div>
+
+  <div class="issue low">
+    <h3><span class="badge b-low">低</span> <code>/api/depth</code> 用 404 表达"这个市场没有盘口"</h3>
+    <dl>
+      <dt>现状</dt><dd>港美股、无效代码、格式错误全部返回 404 + 同一句 detail。调用方无法区分"标的不存在""这个市场不提供盘口""参数写错了"。</dd>
+      <dt>建议</dt><dd>区分语义：市场不支持 → 200 + 空快照（前端天然降级）；标的不存在 → 404；参数非法 → 422。属后端改动，需要重启后端。</dd>
+    </dl>
+  </div>
+
+  <h2>怎么复跑</h2>
+  <div class="card">
+    <div class="note" style="margin-bottom:8px">前置：后端 3018、前端 3011 已启动；Edge 以 <code>--remote-debugging-port=9222 --headless=new</code> 启动。脚本在 <code>docs/kline-lab/</code>。</div>
+    <table>
+      <tr><th>脚本</th><th>覆盖</th><th>上次结果</th></tr>
+      <tr><td><code>qa-echarts.mjs</code></td><td>ECharts 内核：周期 / 主副图 / 缠论 / 叠加层 / 时间轴 / 无效标的</td><td class="num ok">20 / 21</td></tr>
+      <tr><td><code>qa-klinepro.mjs</code></td><td>KLinePro 内核：内核锁定 / 指标面板 / 缠论 / 时间轴定位 / 快捷键 / 响应式</td><td class="num ok">15 / 15</td></tr>
+      <tr><td><code>qa-misc.mjs</code></td><td>七个市场标的 / 主题 / a11y / 连续切内核 6 次 / 连续换股 5 次</td><td class="num ok">11 / 13</td></tr>
+      <tr><td><code>run-terminal-check.mjs</code></td><td>既有终端冒烟（键名已修）</td><td class="num">PASS</td></tr>
+    </table>
+    <div class="note" style="margin-top:10px">
+      说明：<code>qa-echarts</code> 那 1 项失败是"无效标的的空态文案"（即上面的待决策第 2 条）；
+      <code>qa-misc</code> 的 2 项失败是港美股永久载入中（已修，下一次跑应为 13/13）。
+      另有 3 条已知无害项：后端 <code>test_stocksdk_provider.py</code> 因本机无 node 环境永久 3 failed，与本次改动无关。
+    </div>
+  </div>
+
+  <h2>证据截图</h2>
+  <div class="card">
+    <div class="note">全部位于 <code>docs/kline-lab/</code>：<br>
+      <code>qa-echarts-01-baseline.png</code> ECharts 主图（MA + BOLL + 九转 + 成交量副图）·
+      <code>qa-klp-01-baseline.png</code> KLinePro 主图 ·
+      <code>qa-klp-02-indicator-panel.png</code> 指标面板 ·
+      <code>qa-klp-03-after-add-macd.png</code> 添加 MACD 副图 ·
+      <code>qa-klp-06-timeline.png</code> 事件时间轴 ·
+      <code>qa-misc-mkt-00700_HK.png</code> 港股 ·
+      <code>qa-misc-theme-toggled.png</code> 亮色主题 ·
+      <code>qa-echarts-05-invalid-symbol.png</code> 无效标的空态
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
