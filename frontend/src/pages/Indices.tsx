@@ -6,8 +6,8 @@ import { useMarket } from '@/lib/market'
 import { api, type IndexInstrument, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
-import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { IndexKLineChart } from '@/components/kline/IndexKLineChart'
 
 function defaultRange() {
   const now = new Date()
@@ -15,34 +15,6 @@ function defaultRange() {
   const s = new Date(now)
   s.setMonth(s.getMonth() - 6)
   return { start: s.toISOString().slice(0, 10), end }
-}
-
-function toOHLC(rows: KlineRow[]): OHLC[] {
-  return rows
-    .filter(r => r?.date != null && r.open != null && r.close != null)
-    .map(r => ({
-      date: typeof r.date === 'string' ? r.date.slice(0, 10) : String(r.date),
-      open: Number(r.open),
-      high: Number(r.high),
-      low: Number(r.low),
-      close: Number(r.close),
-      volume: Number(r.volume ?? 0),
-      ma5: r.ma5 != null ? Number(r.ma5) : null,
-      ma10: r.ma10 != null ? Number(r.ma10) : null,
-      ma20: r.ma20 != null ? Number(r.ma20) : null,
-      ma60: r.ma60 != null ? Number(r.ma60) : null,
-      macd_dif: r.macd_dif != null ? Number(r.macd_dif) : null,
-      macd_dea: r.macd_dea != null ? Number(r.macd_dea) : null,
-      macd_hist: r.macd_hist != null ? Number(r.macd_hist) : null,
-      rsi_6: r.rsi_6 != null ? Number(r.rsi_6) : null,
-      rsi_14: r.rsi_14 != null ? Number(r.rsi_14) : null,
-      rsi_24: r.rsi_24 != null ? Number(r.rsi_24) : null,
-      kdj_k: r.kdj_k != null ? Number(r.kdj_k) : null,
-      kdj_d: r.kdj_d != null ? Number(r.kdj_d) : null,
-      kdj_j: r.kdj_j != null ? Number(r.kdj_j) : null,
-      boll_upper: r.boll_upper != null ? Number(r.boll_upper) : null,
-      boll_lower: r.boll_lower != null ? Number(r.boll_lower) : null,
-    }))
 }
 
 function fmtPct(v: number | null | undefined) {
@@ -188,7 +160,11 @@ export function Indices() {
   const selectedQuoteValue = selectedQuote?.last_price ?? selectedQuote?.price ?? selectedQuote?.close
   const selectedQuotePct = selectedQuote?.change_pct ?? selectedQuote?.pct
 
-  const chartRows = useMemo(() => toOHLC(daily.data?.rows ?? []), [daily.data?.rows])
+  // 日 K 行(规范化 date 为 YYYY-MM-DD, 供分时联动按日期匹配)
+  const chartRows = useMemo<KlineRow[]>(
+    () => (daily.data?.rows ?? []).map((r: KlineRow) => ({ ...r, date: String(r.date).slice(0, 10) })),
+    [daily.data?.rows],
+  )
   const selectedInfo = [...topRows, ...listRows].find(r => r.symbol === selectedSymbol) || daily.data?.index_info
   const minuteRows: MinuteKlineRow[] = minute.data?.rows ?? []
   const selectedIdx = selectedDate ? chartRows.findIndex(r => r.date === selectedDate) : -1
@@ -332,17 +308,12 @@ export function Indices() {
           {chartRows.length > 0 && (
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
-                <EChartsCandlestick
-                  data={chartRows}
-                  height={620}
-                  showMA={true}
-                  showInfoBar={true}
-                  showMarkers={false}
+                <IndexKLineChart
                   symbol={selectedSymbol}
+                  rows={chartRows}
+                  height={620}
                   linkedPrice={linkedPrice}
                   onDateClick={setSelectedDate}
-                  visibleBars={48}
-                  activeIndicators={['vol', 'macd']}
                 />
               </div>
               <div className="min-w-0 flex-1 border-l border-border pl-3" style={{ height: 620 }}>

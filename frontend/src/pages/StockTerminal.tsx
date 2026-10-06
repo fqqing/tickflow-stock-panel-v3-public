@@ -25,7 +25,7 @@ import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 import { useLayoutMode } from '@/lib/useLayoutMode'
 import { useRecentStocks } from '@/lib/useRecentStocks'
 import { getDefaultRange } from '@/lib/dateRange'
-import { RENDERERS } from '@/lib/chartRenderer'
+import { KLINE_CAPABILITIES } from '@/lib/chartRenderer'
 import { applyWorkspace, chartSession, useChartSession, WORKSPACE_PRESETS } from '@/lib/chartSession'
 import { chartBars, chartFocus, chartSignals } from '@/lib/chartBridge'
 import { eventPointsToTimeline, mergeTimeline, type TimelineEvent } from '@/lib/chart-timeline'
@@ -170,7 +170,7 @@ export function StockTerminal() {
   const alertsOn = overlays.alerts
   const tradesOn = overlays.trades
   /** 唯一内核 klinecharts 的能力矩阵: UI 按它显隐 */
-  const caps = RENDERERS.klinecharts.capabilities
+  const caps = KLINE_CAPABILITIES
   const [priceLines, setPriceLines] = useState<ChartPriceLine[]>([])
   const [showMonitor, setShowMonitor] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)

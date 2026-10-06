@@ -35,7 +35,7 @@ import { applyKcViewport, readKcViewport } from '@/lib/chartViewport'
 import type { ChartEventPoint } from '@/lib/chart-events'
 import { chartBars, chartFocus, chartSignals } from '@/lib/chartBridge'
 import { findDateIndex, signalRowsToTimeline } from '@/lib/chart-timeline'
-import type { ChartPriceLine } from '@/lib/chart-primitives'
+import type { ChartPriceLine, ChartRange } from '@/lib/chart-primitives'
 import {
   ADJUST_OPTIONS,
   isMinutePeriod,
@@ -46,6 +46,7 @@ import {
 } from '@/lib/klinePeriod'
 import { registerChanOverlay } from './chan-overlay-kline'
 import { registerPriceLineOverlay } from './price-line-overlay'
+import { registerRangeOverlay } from './range-overlay-kline'
 import { registerChipsOverlay } from './chips-overlay'
 import { registerStructureOverlay, type StructurePayload } from './structure-overlay'
 import {
@@ -193,10 +194,44 @@ function toChartPeriod(p: KLinePeriod): kc.Period {
   return { type: 'day', span: 1 }
 }
 
+/**
+ * 数据快照 —— 供信息条等外部消费者读取当前 K 线的原始行与个股信息。
+ * 双内核时代这个回传挂在 ECharts 侧的 StockDailyKChart 上, 换内核后 KLinePro
+ * 承担同样的职责: 信息条(StockInfoBar)要 name/stockInfo/rows, 分时联动要日期序列。
+ */
+export interface KLineDataSnapshot {
+  /** 日期序列(日/周/月档; 分钟档为空, 分时联动只在日线档有意义) */
+  dates: string[]
+  /** 原始 K 线行 */
+  rawRows: KlineRow[]
+  stockInfo?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
+  name?: string
+}
+
 export interface KLineProProps {
   symbol: string
   className?: string
   dateRange: { start: string; end: string }
+  /**
+   * 数据快照回传(信息条渲染 + 分时联动日期序列)。
+   * 每次数据就绪/刷新都会回调, 父层据此驱动 StockInfoBar 与分时图。
+   */
+  onDataChange?: (snapshot: KLineDataSnapshot) => void
+  /**
+   * 点击日/周/月 K 线时回调该根对应的日期(分时图联动入口)。
+   * 分钟档不触发(分时联动只在日线口径有意义)。
+   */
+  onDateClick?: (date: string) => void
+  /**
+   * 双击 K 线区回调价格(价格提醒入口)。
+   * 参数 (双击处价格, 当前最新收盘价)。
+   */
+  onPriceDoubleClick?: (price: number, currentPrice: number) => void
+  /**
+   * 扩展数据列参数(逗号分隔 config_id.field_name), 透传给 klineDaily 的 ext_columns。
+   * 信息条的自定义扩展字段(ext)依赖它返回 stock_info.ext。
+   */
+  extColumns?: string
   /** 当前周期; 不传则组件自己维护(内部工具条) */
   period?: KLinePeriod
   /** 受控模式: 由外层持有周期(终端键盘 1/2/3 与图内按钮共用一份状态) */
@@ -215,6 +250,8 @@ export interface KLineProProps {
   onStructureChange?: (v: boolean) => void
   chanEnabled?: boolean
   priceLines?: ChartPriceLine[]
+  /** 横向日期区间高亮(回测持仓区间等), 画在主图上的半透明竖向色块 */
+  ranges?: ChartRange[]
   /** 筹码分布开关(受控)。不传则组件内部维护, 默认关 */
   chipsEnabled?: boolean
   onChipsChange?: (v: boolean) => void
@@ -244,6 +281,10 @@ export function KLinePro({
   symbol,
   className,
   dateRange,
+  onDataChange,
+  onDateClick,
+  onPriceDoubleClick,
+  extColumns,
   period: periodProp,
   onPeriodChange,
   adjust: adjustProp,
@@ -252,6 +293,7 @@ export function KLinePro({
   onStructureChange,
   chanEnabled = false,
   priceLines = [],
+  ranges = [],
   chipsEnabled: chipsProp,
   onChipsChange,
   signalsEnabled: signalsProp,
@@ -277,9 +319,9 @@ export function KLinePro({
    *   走 overrideOverlay 分支会打到不存在的 id 上, 表现是「换股后叠加层静默消失」。
    */
   const overlayIds = useRef<
-    Record<'chan' | 'chips' | 'price' | 'structure' | 'signal' | 'events', string | null>
+    Record<'chan' | 'chips' | 'price' | 'range' | 'structure' | 'signal' | 'events', string | null>
   >({
-    chan: null, chips: null, price: null, structure: null, signal: null, events: null,
+    chan: null, chips: null, price: null, range: null, structure: null, signal: null, events: null,
   })
   /** 会话视口只重放一次(挂载/换股后), 之后交给用户自由滚动 */
   const vpAppliedRef = useRef(false)
@@ -324,8 +366,8 @@ export function KLinePro({
   const daily = useQuery({
     // signalsOn 必须进 key: 打开信号标记要重新拉一次带 signal_* 列的响应,
     // 否则命中旧缓存(没有信号列)会导致图上什么都不标。
-    queryKey: [...QK.kline(symbol, dateRange.start, dateRange.end, undefined, period, adjust), signalsOn],
-    queryFn: () => api.klineDaily(symbol, days, dateRange, undefined, CUSTOM_INDICATORS, klineChartFields(signalsOn), period, adjust),
+    queryKey: [...QK.kline(symbol, dateRange.start, dateRange.end, extColumns, period, adjust), signalsOn],
+    queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns, CUSTOM_INDICATORS, klineChartFields(signalsOn), period, adjust),
     enabled: !!symbol && !minutePeriod,
   })
 
@@ -344,6 +386,17 @@ export function KLinePro({
     () => (minutePeriod ? [] : rows.map(d => new Date(d.timestamp).toISOString().slice(0, 10))),
     [rows, minutePeriod],
   )
+
+  // 数据快照回传: 信息条要 name/stockInfo/rows, 分时联动要日期序列。
+  // 每次数据就绪/刷新都回调, 父层据此驱动 StockInfoBar 与分时图。
+  useEffect(() => {
+    onDataChange?.({
+      dates: chartDates,
+      rawRows: active.data?.rows ?? [],
+      stockInfo: active.data?.stock_info,
+      name: active.data?.name,
+    })
+  }, [chartDates, active.data, onDataChange])
 
   // 缠论只在日线档有意义(笔/中枢按日线口径算), 分钟档直接关掉, 免得发无谓请求
   const chanLayers = useChanOverlay(symbol, chartDates, chanEnabled && !minutePeriod)
@@ -377,11 +430,12 @@ export function KLinePro({
     setReady(false)
     indRefs.current.clear()
     overlayIds.current = {
-      chan: null, chips: null, price: null, structure: null, signal: null, events: null,
+      chan: null, chips: null, price: null, range: null, structure: null, signal: null, events: null,
     }
     vpAppliedRef.current = false
     registerChanOverlay()
     registerPriceLineOverlay()
+    registerRangeOverlay()
     registerChipsOverlay()
     registerStructureOverlay()
     registerSignalMarkersOverlay()
@@ -426,6 +480,41 @@ export function KLinePro({
     rowsRef.current = rows
     chart.resetData()
   }, [rows])
+
+  // 点击 K 线 -> 回调日期(分时联动)。仅日/周/月档触发, 分钟档无分时联动意义。
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !ready || !onDateClick) return
+    const handler = (data?: unknown) => {
+      if (minutePeriod) return
+      const ts = (data as { timestamp?: number } | undefined)?.timestamp
+      if (typeof ts !== 'number') return
+      onDateClick(new Date(ts).toISOString().slice(0, 10))
+    }
+    chart.subscribeAction('onCandleBarClick', handler)
+    return () => chart.unsubscribeAction('onCandleBarClick', handler)
+  }, [ready, onDateClick, minutePeriod])
+
+  // 双击 K 线区 -> 回调价格(价格提醒入口)。用 convertFromPixel 把像素转主图价格。
+  useEffect(() => {
+    const el = containerRef.current
+    const chart = chartRef.current
+    if (!el || !chart || !ready || !onPriceDoubleClick) return
+    const onDbl = (e: MouseEvent) => {
+      const rect = el.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      const pts = chart.convertFromPixel([{ x, y }], { paneId: MAIN_PANE_ID })
+      const p = Array.isArray(pts) ? pts[0] : pts
+      const price = p?.value
+      if (typeof price !== 'number' || !Number.isFinite(price)) return
+      const cur = rowsRef.current
+      const lastClose = cur.length > 0 ? cur[cur.length - 1].close : undefined
+      onPriceDoubleClick(price, typeof lastClose === 'number' ? lastClose : price)
+    }
+    el.addEventListener('dblclick', onDbl)
+    return () => el.removeEventListener('dblclick', onDbl)
+  }, [ready, onPriceDoubleClick])
 
   // ── 视口: 静默写回会话 ──
   // 滚动/缩放每秒可触发几十次, 绝不能走 setState —— 写 chartSession 的静默通道,
@@ -534,6 +623,25 @@ export function KLinePro({
       chart.overrideOverlay({ id: overlayIds.current.price, extendData: priceLines })
     }
   }, [priceLines, ready])
+
+  // 区间高亮(回测持仓区间等)：创建一次，override 更新
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !ready) return
+    if (!overlayIds.current.range) {
+      const first = rowsRef.current[0]
+      if (!first) return
+      const id = chart.createOverlay({
+        name: 'range',
+        paneId: 'candle_pane',
+        points: [{ timestamp: first.timestamp, value: first.close }],
+        extendData: ranges,
+      })
+      if (typeof id === 'string') overlayIds.current.range = id
+    } else {
+      chart.overrideOverlay({ id: overlayIds.current.range, extendData: ranges })
+    }
+  }, [ranges, ready])
 
   // ── 主图定量结构: 与 ECharts 侧 showStructure 同一套口径 ──
   //   (EMA25/89 双轨 + 轨道带 + BBB/SSS 交叉图标 + 九转数字)

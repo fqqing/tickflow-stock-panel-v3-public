@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Clock, X } from 'lucide-react'
 import { StockPanel } from '@/components/StockPanel'
-import type { ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type { ChartPriceLine, ChartRange } from '@/lib/chart-primitives'
 import type { StrategyBacktestTrade } from '@/lib/api'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
@@ -158,8 +158,6 @@ export function TradeKlineModal({ trade, onClose }: Props) {
                 dateRange={dateRange}
                 ranges={ranges}
                 priceLines={priceLines}
-                showLimitMarkers={false}
-                showMarkerToggle={false}
                 showIntraday={showIntraday}
                 onSelectDate={() => { if (!showIntraday) setShowIntraday(true) }}
               />

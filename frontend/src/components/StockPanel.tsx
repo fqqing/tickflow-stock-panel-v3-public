@@ -1,28 +1,22 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { X } from 'lucide-react'
-import { type KlineRow, type FinancialMetricRecord } from '@/lib/api'
+import { type FinancialMetricRecord } from '@/lib/api'
 import { StockInfoBar } from '@/components/StockInfoBar'
-import { StockDailyKChart, getDefaultRange, type KLinePeriod, type StockDailyKChartResult } from '@/components/StockDailyKChart'
-import type { KLineAdjust } from '@/lib/klinePeriod'
+import { KLinePro, type KLineDataSnapshot } from '@/components/kline/KLinePro'
+import { getDefaultRange } from '@/lib/dateRange'
+import type { KLineAdjust, KLinePeriod } from '@/lib/klinePeriod'
 import type { ChartEventPoint } from '@/lib/chart-events'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
-import { useChanOverlay } from '@/lib/useChanOverlay'
 import type { UnifiedQuote } from '@/lib/useQuote'
-import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type { ChartPriceLine, ChartRange } from '@/lib/chart-primitives'
 import {
   loadInfoFields,
   saveInfoFields,
   buildInfoExtColumnsParam,
   type ColumnConfig,
 } from '@/lib/stock-info-fields'
-
-/**
- * 缠论开启时图表的初始可视根数。
- * 120 根在 500px 宽的图里约 4px/根，既能看清笔的折点，又能把最近 1~2 个中枢纳入视野。
- */
-const CHAN_VISIBLE_BARS = 120
 
 interface Props {
   symbol: string
@@ -33,27 +27,26 @@ interface Props {
   onSelectDate?: (date: string) => void
   /** 外部传入的日期范围 */
   dateRange?: { start: string; end: string }
-  markers?: ChartMarker[]
+  /** 横向日期区间高亮(回测持仓区间等) */
   ranges?: ChartRange[]
+  /** 价位水平线(监控触发价 / 回测买卖价等) */
   priceLines?: ChartPriceLine[]
-  showLimitMarkers?: boolean
-  showMarkerToggle?: boolean
   /** 缠论叠加开关（受控）。传 undefined = 不启用缠论, 也不显示「缠论」按钮 */
   chanOverlay?: boolean
   onToggleChan?: () => void
-  /** K 线周期（受控，透传给 StockDailyKChart）。终端层持有，供键盘 1/2/3 跨内核生效 */
+  /** K 线周期（受控，透传给 KLinePro）。 */
   period?: KLinePeriod
   onPeriodChange?: (p: KLinePeriod) => void
-  /** 主图定量结构开关（受控，透传）。终端层持有，与 KLinePro 共用一份状态 */
+  /** 主图定量结构开关（受控，透传）。 */
   structureOverlay?: boolean
   onStructureChange?: (v: boolean) => void
-  /** 策略信号标记开关（受控，透传）。与 KLinePro 共用会话里的同一份状态 */
+  /** 策略信号标记开关（受控，透传）。 */
   signalsEnabled?: boolean
-  /** 外部事件标记(监控触发 / 回测买卖点), 透传给日K图, 两内核同口径 */
+  /** 外部事件标记(监控触发 / 回测买卖点) */
   eventMarks?: ChartEventPoint[]
-  /** true = 隐藏图内叠加层开关(终端层已提供统一入口, 避免同屏两组同名按钮) */
+  /** true = 隐藏图内叠加层开关(终端层已提供统一入口) */
   hideOverlayToggles?: boolean
-  /** 复权方式（受控，透传）。终端层持有，与 KLinePro 共用一份状态 */
+  /** 复权方式（受控，透传）。 */
   adjust?: KLineAdjust
   onAdjustChange?: (a: KLineAdjust) => void
   /** 加监控回调 (传入后信息条显示 RadioTower 图标) */
@@ -64,13 +57,12 @@ interface Props {
   onAddToWatchlist?: (groupId: string | null) => void
   onRemoveFromWatchlist?: () => void
   watchlistPending?: boolean
-  /** 分时图自动刷新间隔(ms)。undefined = 不轮询。个股对话框盘中实时刷新时传入。 */
+  /** 分时图/分钟K 自动刷新间隔(ms)。undefined = 不轮询。 */
   refetchIntervalMs?: number
   /** 只渲染信息条, 隐藏图表 (用于分时 tab 共享信息条) */
   infoBarOnly?: boolean
   /**
    * 实时快照（价格单一源），透传给 StockInfoBar。
-   * 传入后信息条主价格与顶栏/盘口同源, 不传则沿用日 K 最后一根(向后兼容)。
    */
   liveQuote?: UnifiedQuote | null
 }
@@ -84,11 +76,8 @@ export function StockPanel({
   className,
   onSelectDate,
   dateRange: externalDateRange,
-  markers,
   ranges,
   priceLines,
-  showLimitMarkers = true,
-  showMarkerToggle = true,
   chanOverlay,
   onToggleChan,
   period,
@@ -113,8 +102,9 @@ export function StockPanel({
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [intradayDismissed, setIntradayDismissed] = useState(false)
-  const [dailyResult, setDailyResult] = useState<StockDailyKChartResult | null>(null)
-  // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 StockDailyKChart 请求 ext 数据
+  // KLinePro 的数据快照(信息条 + 分时联动日期序列)
+  const [snapshot, setSnapshot] = useState<KLineDataSnapshot | null>(null)
+  // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 KLinePro 请求 ext 数据
   const [fields, setFields] = useState<ColumnConfig[]>(loadInfoFields)
   const extColumns = useMemo(() => buildInfoExtColumnsParam(fields), [fields])
 
@@ -124,7 +114,6 @@ export function StockPanel({
   }, [])
 
   // 财务指标：仅当信息条配置含可见的财务字段且用户具备财务数据能力 (financial) 时才请求
-  // 无能力时跳过请求, 避免后端抛 CapabilityDenied (403) 导致 free/starter 档弹错误提示
   const { data: caps } = useCapabilities()
   const hasFinancialCap = !!caps?.capabilities?.['financial']
   const hasFinanceField = useMemo(
@@ -142,31 +131,20 @@ export function StockPanel({
     onSelectDate?.(date)
   }, [onSelectDate])
 
-  const rows = dailyResult?.rows ?? []
-  const stockInfo = dailyResult?.stockInfo
-  const rawRows: KlineRow[] = dailyResult?.rawRows ?? []
+  const handleDataChange = useCallback((snap: KLineDataSnapshot) => {
+    setSnapshot(snap)
+  }, [])
 
-  // ── 缠论叠加 ──────────────────────────────────────────────────
-  // 图表 x 轴日期序列：由日K结果派生，供缠论叠加层裁剪到当前显示区间
-  const chartDates = useMemo(() => (dailyResult?.rows ?? []).map(r => r.date), [dailyResult])
-  const chanActive = chanOverlay === true && !infoBarOnly
-  const chanLayers = useChanOverlay(symbol, chartDates, chanActive)
-  // 合并外部标注与缠论标注；用 useMemo 保住引用，避免 ECharts 每次渲染都全量 setOption
-  const mergedMarkers = useMemo(
-    () => (chanLayers.markers.length > 0 ? [...(markers ?? []), ...chanLayers.markers] : markers),
-    [markers, chanLayers.markers],
-  )
-  const mergedRanges = useMemo(
-    () => (chanLayers.ranges.length > 0 ? [...(ranges ?? []), ...chanLayers.ranges] : ranges),
-    [ranges, chanLayers.ranges],
-  )
-  // 缠论开启时放宽初始可视根数：中枢一定在买点之前（三买更是如此），
-  // 默认 40~60 根只会看到箭头看不到它所依附的中枢，等于信息残缺。
-  const baseVisibleBars = chanActive ? CHAN_VISIBLE_BARS : showIntraday ? 40 : 60
+  const dates = snapshot?.dates ?? []
+  const rawRows = snapshot?.rawRows ?? []
+  const stockInfo = snapshot?.stockInfo
+  const name = snapshot?.name
+
+  const currentPeriod = period ?? 'day'
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
   // 注意：必须跳过首次挂载——重开弹窗时 kline 命中 react-query 缓存，
-  // 子组件 onDataChange effect（先于父 effect 执行）会把 dailyResult 置为有效数据，
+  // 子组件 onDataChange effect（先于父 effect 执行）会把 snapshot 置为有效数据，
   // 若此处再无条件清空，会把刚加载的数据抹掉，导致信息条整行消失。
   const prevSymbol = useRef<string | null>(symbol)
   useEffect(() => {
@@ -174,22 +152,30 @@ export function StockPanel({
     prevSymbol.current = symbol
     setSelectedDate(null)
     setLinkedPrice(null)
-    setDailyResult(null)
+    setSnapshot(null)
   }, [symbol])
 
   // 当分时开启、无选中日期时，自动选中最新日期
   useEffect(() => {
-    if (showIntraday && !selectedDate && rows.length > 0) {
-      setSelectedDate(rows[rows.length - 1].date)
+    if (showIntraday && !selectedDate && dates.length > 0) {
+      setSelectedDate(dates[dates.length - 1])
     }
-  }, [showIntraday, selectedDate, rows])
+  }, [showIntraday, selectedDate, dates])
 
-  const selectedIdx = selectedDate ? rows.findIndex(r => r.date === selectedDate) : -1
+  const selectedIdx = selectedDate ? dates.indexOf(selectedDate) : -1
   const prevClose = selectedIdx > 0
-    ? rows[selectedIdx - 1].close
-    : rows.length >= 2
-      ? rows[rows.length - 2].close
+    ? Number(rawRows[selectedIdx - 1]?.close)
+    : rawRows.length >= 2
+      ? Number(rawRows[rawRows.length - 2]?.close)
       : undefined
+  const currentPrice = rawRows.length > 0 ? Number(rawRows[rawRows.length - 1].close) : undefined
+
+  // 分时图 hover 的联动价并入 KLinePro 的价位线(临时参考线, 与监控线同槽位)
+  const effectivePriceLines = useMemo<ChartPriceLine[]>(() => {
+    if (linkedPrice == null) return priceLines ?? []
+    return [...(priceLines ?? []), { value: linkedPrice, color: '#F79009', label: '联动' }]
+  }, [linkedPrice, priceLines])
+
   if (!symbol) return null
 
   // 财务指标最新一期（metrics 按 period_end 排序，取首项）
@@ -199,7 +185,7 @@ export function StockPanel({
     <div className={className}>
       <StockInfoBar
         symbol={symbol}
-        name={dailyResult?.name}
+        name={name}
         stockInfo={stockInfo}
         rows={rawRows}
         fields={fields}
@@ -215,35 +201,52 @@ export function StockPanel({
 
       {infoBarOnly ? null : (
       <div className="flex gap-3 items-start">
-        <StockDailyKChart
-          symbol={symbol}
-          height={height}
-          className="flex-1 min-w-0"
-          dateRange={dateRange}
-          markers={mergedMarkers}
-          ranges={mergedRanges}
-          priceLines={priceLines}
-          polylines={chanLayers.polylines}
-          showLimitMarkers={showLimitMarkers}
-          showMarkerToggle={showMarkerToggle}
-          chanEnabled={chanOverlay === undefined ? undefined : chanOverlay === true}
-          onToggleChan={onToggleChan}
-          period={period}
-          onPeriodChange={onPeriodChange}
-          structureOverlay={structureOverlay}
-          onStructureChange={onStructureChange}
-          signalsEnabled={signalsEnabled}
-          eventMarks={eventMarks}
-          hideOverlayToggles={hideOverlayToggles}
-          adjust={adjust}
-          onAdjustChange={onAdjustChange}
-          linkedPrice={linkedPrice}
-          onDateClick={handleDateClick}
-          onPriceDoubleClick={onPriceDoubleClick}
-          onDataChange={setDailyResult}
-          visibleBars={baseVisibleBars}
-          extColumns={extColumns}
-        />
+        <div className="flex-1 min-w-0">
+          {/* 缠论入口: KLinePro 不渲染缠论按钮(纯受控), 由这里提供 */}
+          {chanOverlay !== undefined && onToggleChan !== undefined && (
+            <div className="flex items-center gap-1.5 px-1 pb-0.5">
+              <button
+                onClick={onToggleChan}
+                disabled={currentPeriod !== 'day'}
+                title={currentPeriod !== 'day'
+                  ? '缠论基于日线笔/中枢, 仅在日K周期下可用'
+                  : chanOverlay ? '隐藏缠论笔/中枢/买卖点' : '显示缠论笔/中枢/买卖点'}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                  currentPeriod !== 'day'
+                    ? 'bg-elevated text-muted/40 cursor-not-allowed'
+                    : chanOverlay
+                      ? 'text-accent bg-accent/15 cursor-pointer'
+                      : 'bg-elevated text-muted hover:text-secondary cursor-pointer'
+                }`}
+              >
+                缠论
+              </button>
+            </div>
+          )}
+          <div style={{ height }}>
+            <KLinePro
+              symbol={symbol}
+              dateRange={dateRange}
+              period={period}
+              onPeriodChange={onPeriodChange}
+              adjust={adjust}
+              onAdjustChange={onAdjustChange}
+              structureEnabled={structureOverlay}
+              onStructureChange={onStructureChange}
+              chanEnabled={chanOverlay === true && !infoBarOnly}
+              priceLines={effectivePriceLines}
+              ranges={ranges}
+              signalsEnabled={signalsEnabled}
+              eventMarks={eventMarks}
+              hideOverlayToggles={hideOverlayToggles}
+              extColumns={extColumns}
+              onDataChange={handleDataChange}
+              onDateClick={handleDateClick}
+              onPriceDoubleClick={onPriceDoubleClick}
+              refetchIntervalMs={refetchIntervalMs}
+            />
+          </div>
+        </div>
 
         {showIntraday && selectedDate && !intradayDismissed && (
           <div className="relative flex-1 min-w-0 border-l border-border pl-3">
@@ -262,7 +265,7 @@ export function StockPanel({
               prevClose={prevClose}
               onPriceHover={setLinkedPrice}
               onPriceDoubleClick={onPriceDoubleClick}
-              currentPrice={rows[rows.length - 1]?.close}
+              currentPrice={currentPrice}
               priceLines={priceLines}
               refetchIntervalMs={refetchIntervalMs}
             />
