@@ -44,7 +44,11 @@ export default defineConfig({
         // 用函数形式按 node_modules 路径匹配, 比对象形式更可靠。
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('echarts')) return 'echarts'
+            // ★ klinecharts 含 "echarts" 子串(klin-echarts), 不能用 includes('echarts')
+            // 否则会把 klinecharts 误分进 echarts chunk, 导致终端首屏连带加载 1.27MB echarts。
+            // 这里用「目录名 + 前后斜杠」精确匹配, 三库互不串扰。
+            if (id.includes('/echarts/') || id.includes('/echarts-for-react/')) return 'echarts'
+            if (id.includes('/klinecharts/')) return 'klinecharts'
             if (id.includes('lightweight-charts')) return 'lightweight-charts'
           }
         },

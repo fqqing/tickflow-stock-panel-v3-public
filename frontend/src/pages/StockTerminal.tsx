@@ -7,7 +7,7 @@
  *       1024-1440  图表 + 右栏(左栏收为抽屉)
  *       <1024   图表全宽(左右都收为抽屉)
  *
- * 图表内核: 默认 ECharts(StockPanel), 灰度开关可切到 KLineChart(KLinePro, P1)。
+ * 图表内核: klinecharts(KLinePro) 单内核。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
@@ -19,13 +19,13 @@ import {
   tradesToEvents,
 } from '@/lib/chart-events'
 import { QK } from '@/lib/queryKeys'
-import { useQuote, useElementHeight } from '@/lib/useQuote'
+import { useQuote } from '@/lib/useQuote'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 import { useLayoutMode } from '@/lib/useLayoutMode'
 import { useRecentStocks } from '@/lib/useRecentStocks'
-import { StockPanel, getDefaultRange } from '@/components/StockPanel'
-import { fallbackPeriod, RENDERERS, type ChartRendererId } from '@/lib/chartRenderer'
+import { getDefaultRange } from '@/lib/dateRange'
+import { RENDERERS } from '@/lib/chartRenderer'
 import { applyWorkspace, chartSession, useChartSession, WORKSPACE_PRESETS } from '@/lib/chartSession'
 import { chartBars, chartFocus, chartSignals } from '@/lib/chartBridge'
 import { eventPointsToTimeline, mergeTimeline, type TimelineEvent } from '@/lib/chart-timeline'
@@ -39,8 +39,7 @@ import { StockRail, type RailItem } from '@/components/stock-terminal/StockRail'
 import { CommandPalette } from '@/components/stock-terminal/CommandPalette'
 import { ShortcutHelp } from '@/components/stock-terminal/ShortcutHelp'
 import { KLinePro } from '@/components/kline/KLinePro'
-import { getKLineProFlag, setKLineProFlag } from '@/components/kline/useKLineProFlag'
-import type { ChartPriceLine } from '@/components/EChartsCandlestick'
+import type { ChartPriceLine } from '@/lib/chart-primitives'
 import { cn } from '@/lib/cn'
 
 const PRESETS: { label: string; months: number }[] = [
@@ -170,12 +169,8 @@ export function StockTerminal() {
   const signalsOn = overlays.signals
   const alertsOn = overlays.alerts
   const tradesOn = overlays.trades
-  const [renderer, setRenderer] = useState<ChartRendererId>(
-    () => (getKLineProFlag() ? 'klinecharts' : 'echarts'),
-  )
-  const useKLine = renderer === 'klinecharts'
-  /** 当前渲染器的能力矩阵: UI 按它显隐, 不按内核名分叉 */
-  const caps = RENDERERS[renderer].capabilities
+  /** 唯一内核 klinecharts 的能力矩阵: UI 按它显隐 */
+  const caps = RENDERERS.klinecharts.capabilities
   const [priceLines, setPriceLines] = useState<ChartPriceLine[]>([])
   const [showMonitor, setShowMonitor] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -197,9 +192,7 @@ export function StockTerminal() {
   const depthDocked = mode !== 'one' && depthOpen
   const depthDrawer = mode === 'one' && depthOpen
 
-  // 图表高度随窗口自适应
   const boxRef = useRef<HTMLDivElement>(null)
-  const chartHeight = useElementHeight(boxRef, 92, 260)
 
   // 焦点股票注册: SSE 推送时精准刷新当前股票日K
   useEffect(() => {
@@ -363,17 +356,6 @@ export function StockTerminal() {
     setPriceLines([{ value: price, color: '#F79009', label: '触发价' }])
   }
 
-  const handleToggleKLine = useCallback(() => {
-    const next: ChartRendererId = renderer === 'klinecharts' ? 'echarts' : 'klinecharts'
-    setRenderer(next)
-    setKLineProFlag(next === 'klinecharts')
-    // 目标内核不支持当前周期时退化到最近可用档位(ECharts 无 1m -> 5m)。
-    // 否则切过去会发现档位凭空消失 —— 这也是「割裂」的一种表现。
-    const current = chartSession.getState().period
-    const fp = fallbackPeriod(next, current)
-    if (fp !== current) chartSession.setPeriod(fp)
-  }, [renderer])
-
   // ── P2 键盘优先 ────────────────────────────────────────────
   useEffect(() => {
     if (!symbol) return
@@ -419,8 +401,6 @@ export function StockTerminal() {
           setRailOpen(v => !v); break
         case 'p':
           setDepthOpen(v => !v); break
-        case 'g':
-          handleToggleKLine(); break
         case '[':
           stepSymbol(-1); break
         case ']':
@@ -442,7 +422,7 @@ export function StockTerminal() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [alertsOn, chanOn, handleToggleKLine, helpOpen, navigate, paletteOpen, showMonitor, signalsOn, stepSymbol, structOn, symbol, timelineOn, toggleTimeline, tradesOn])
+  }, [alertsOn, chanOn, helpOpen, navigate, paletteOpen, showMonitor, signalsOn, stepSymbol, structOn, symbol, timelineOn, toggleTimeline, tradesOn])
 
   if (!symbol) {
     return (
@@ -492,10 +472,6 @@ export function StockTerminal() {
                   const id = e.target.value
                   if (!id) return
                   applyWorkspace(id)
-                  // 模板想要的档位当前渲染器不支持时(ECharts 无 1m)兜底退化
-                  const cur = chartSession.getState().period
-                  const fp = fallbackPeriod(renderer, cur)
-                  if (fp !== cur) chartSession.setPeriod(fp)
                 }}
                 className="h-6 rounded border border-border/70 bg-elevated px-1 text-[11px] text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
               >
@@ -563,16 +539,6 @@ export function StockTerminal() {
                 />
               )}
               <button
-                onClick={handleToggleKLine}
-                title={useKLine ? '切回 ECharts 内核 (g)' : '试用 KLineChart 内核 (g)'}
-                className={cn(
-                  'h-6 rounded border px-2 text-[11px] font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
-                  useKLine ? 'border-amber-500/30 bg-amber-500/20 text-amber-400' : 'border-transparent text-muted hover:bg-elevated',
-                )}
-              >
-                {useKLine ? 'KLinePro' : 'ECharts'}
-              </button>
-              <button
                 onClick={() => setHelpOpen(true)}
                 title="键盘快捷键 (?)"
                 className="h-6 rounded border border-transparent px-1.5 text-[11px] font-mono text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -585,50 +551,25 @@ export function StockTerminal() {
             </div>
           </div>
           <div ref={boxRef} className="min-h-0 flex-1">
-            {useKLine ? (
-              <KLinePro
-                symbol={symbol}
-                dateRange={dateRange}
-                period={period}
-                onPeriodChange={chartSession.setPeriod}
-                adjust={adjust}
-                onAdjustChange={chartSession.setAdjust}
-                structureEnabled={structOn}
-                onStructureChange={v => chartSession.setOverlay('structure', v)}
-                chanEnabled={chanOn}
-                chipsEnabled={chipsOn}
-                onChipsChange={v => chartSession.setOverlay('chips', v)}
-                signalsEnabled={signalsOn}
-                onSignalsChange={v => chartSession.setOverlay('signals', v)}
-                eventMarks={eventMarks}
-                hideOverlayToggles
-                priceLines={priceLines}
-                refetchIntervalMs={refetchMs}
-              />
-            ) : (
-              <StockPanel
-                symbol={symbol}
-                height={chartHeight}
-                dateRange={dateRange}
-                priceLines={priceLines}
-                chanOverlay={chanOn}
-                period={period}
-                onPeriodChange={chartSession.setPeriod}
-                adjust={adjust}
-                onAdjustChange={chartSession.setAdjust}
-                structureOverlay={structOn}
-                onStructureChange={v => chartSession.setOverlay('structure', v)}
-                signalsEnabled={signalsOn}
-                eventMarks={eventMarks}
-                hideOverlayToggles
-                refetchIntervalMs={refetchMs}
-                inWatchlist={inWatchlist}
-                onAddToWatchlist={() => toggleWatchlist.mutate('add')}
-                onRemoveFromWatchlist={() => toggleWatchlist.mutate('remove')}
-                watchlistPending={toggleWatchlist.isPending}
-                liveQuote={quote}
-              />
-            )}
+            <KLinePro
+              symbol={symbol}
+              dateRange={dateRange}
+              period={period}
+              onPeriodChange={chartSession.setPeriod}
+              adjust={adjust}
+              onAdjustChange={chartSession.setAdjust}
+              structureEnabled={structOn}
+              onStructureChange={v => chartSession.setOverlay('structure', v)}
+              chanEnabled={chanOn}
+              chipsEnabled={chipsOn}
+              onChipsChange={v => chartSession.setOverlay('chips', v)}
+              signalsEnabled={signalsOn}
+              onSignalsChange={v => chartSession.setOverlay('signals', v)}
+              eventMarks={eventMarks}
+              hideOverlayToggles
+              priceLines={priceLines}
+              refetchIntervalMs={refetchMs}
+            />
           </div>
           {/* 事件时间轴: 只在日线档渲染 —— 告警与买卖点都是日粒度(周月线取不到),
               signal_* 列也被聚合丢掉了, 非日线档渲染出来只会是一条空轨道。 */}

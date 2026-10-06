@@ -4,6 +4,7 @@ import { api, KLINE_CHART_FIELDS, klineChartFields, type KlineRow } from '@/lib/
 import { QK } from '@/lib/queryKeys'
 import type { ChartEventPoint } from '@/lib/chart-events'
 import { storage } from '@/lib/storage'
+import { getDefaultRange } from '@/lib/dateRange'
 import {
   ADJUST_OPTIONS,
   isMinutePeriod,
@@ -236,14 +237,7 @@ function buildLimitUpMarkers(rows: KlineRow[]): ChartMarker[] {
   return markers
 }
 
-export function getDefaultRange(): { start: string; end: string } {
-  const now = new Date()
-  const end = now.toISOString().slice(0, 10)
-  const s = new Date(now)
-  s.setMonth(s.getMonth() - 6)
-  const start = s.toISOString().slice(0, 10)
-  return { start, end }
-}
+export { getDefaultRange }
 
 function rangeDays(range: { start: string; end: string }): number {
   const start = new Date(range.start)
