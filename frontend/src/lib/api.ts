@@ -293,6 +293,14 @@ export function klineChartFields(withSignals: boolean): string {
   return withSignals ? `${KLINE_CHART_FIELDS},${KLINE_SIGNAL_FIELDS}` : KLINE_CHART_FIELDS
 }
 
+/**
+ * 涨停 / 连板 / 炸板标记所需列。独立于策略信号列(信号列按需下发), 这三个量级极小
+ * (2 个布尔 + 1 个数字列), 始终随 K 线图下发 —— 涨停标记是 K 线的固有语义, 不该
+ * 被「策略信号开关」绑架。consecutive_limit_ups 此前既不在白名单也不在信号列里,
+ * 导致旧实现连板数恒为「板」, 这里一并修掉。
+ */
+export const LIMIT_UP_FIELDS = 'signal_limit_up,signal_broken_limit_up,consecutive_limit_ups'
+
 export interface KlineRow {
   symbol?: string
   date: string
@@ -338,6 +346,12 @@ export interface KlineRow {
   /** 顶部结构标注：1 结构形成 / 2 钝化 / 3 钝化消失；ms_ty 为标注纵坐标 */
   ms_ttext?: number | null
   ms_ty?: number | null
+  /** 涨停(封板)标记，来自 signal_* 列 */
+  signal_limit_up?: boolean | null
+  /** 炸板标记，来自 signal_* 列 */
+  signal_broken_limit_up?: boolean | null
+  /** 连板数(涨停连续天数) */
+  consecutive_limit_ups?: number | null
   [key: string]: any
 }
 

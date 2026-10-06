@@ -23,10 +23,10 @@
  *   (EMA25/89 双轨 + 交叉图标 + 九转) + 筹码分布 + 监控价位水平线 + 三档复权 + 主题跟随。
  * 未做: 涨停标记、手绘线、分时(均价)图、MACD 定量结构副图。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import * as kc from 'klinecharts'
-import { api, KLINE_CHART_FIELDS, klineChartFields, type KlineRow } from '@/lib/api'
+import { api, KLINE_CHART_FIELDS, LIMIT_UP_FIELDS, klineChartFields, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useChanOverlay } from '@/lib/useChanOverlay'
 import { useChartTheme } from '@/lib/theme'
@@ -59,6 +59,9 @@ import {
   setEventMarks,
   type EventMarkersPayload,
 } from './event-markers'
+import { registerLimitUpMarkersOverlay, type LimitUpData } from './limit-up-markers'
+import { registerVolumeCompareOverlay, type VolumeComparePayload } from './volume-compare'
+import { registerDrawLineOverlay, DRAW_COLOR, type DrawLine } from './draw-line-overlay'
 import { IndicatorManager } from './IndicatorManager'
 import {
   MAIN_PANE_ID,
@@ -69,6 +72,7 @@ import {
   type IndicatorConfig,
 } from '@/lib/klineIndicators'
 import { cn } from '@/lib/cn'
+import { storage } from '@/lib/storage'
 
 const BULL = '#F04438' // --bull 红涨
 const BEAR = '#12B76A' // --bear 绿跌
@@ -76,6 +80,25 @@ const BEAR = '#12B76A' // --bear 绿跌
 const CROSSHAIR = '#475569'
 
 const CUSTOM_INDICATORS = 'trend_dragon,capital_momentum,structure,macd_structure'
+
+/** 用户手绘线持久化: 按 symbol 存 localStorage(与旧 ECharts 侧同 key) */
+const drawLinesKey = (symbol: string) => `tickflow.kline.drawlines.${symbol}`
+function loadDrawLines(symbol: string): DrawLine[] {
+  try {
+    const raw = localStorage.getItem(drawLinesKey(symbol))
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.filter((l: DrawLine) => l?.a?.date && l?.b?.date) : []
+  } catch {
+    return []
+  }
+}
+function saveDrawLines(symbol: string, lines: DrawLine[]): void {
+  try {
+    localStorage.setItem(drawLinesKey(symbol), JSON.stringify(lines))
+  } catch {
+    /* 隐私模式 / 配额满: 静默降级成"本次会话有效" */
+  }
+}
 
 /** 分钟档回看天数(交给后端 days 参数) */
 const MINUTE_LOOKBACK_DAYS = 120
@@ -159,6 +182,12 @@ function rowToKLine(r: KlineRow): kc.KLineData | null {
     st_icon: r.st_icon ?? 0,
     st_dn: r.st_dn ?? 0,
     st_up: r.st_up ?? 0,
+    // 涨停标记: 炸板优先, 其次涨停(连板数)。数据来自 signal_* 布尔列 + consecutive_limit_ups
+    limitUp: r.signal_broken_limit_up
+      ? ({ kind: 'break', boards: 0 } as LimitUpData)
+      : r.signal_limit_up
+        ? ({ kind: 'board', boards: Number(r.consecutive_limit_ups ?? 1) } as LimitUpData)
+        : null,
   }
 }
 
@@ -319,9 +348,10 @@ export function KLinePro({
    *   走 overrideOverlay 分支会打到不存在的 id 上, 表现是「换股后叠加层静默消失」。
    */
   const overlayIds = useRef<
-    Record<'chan' | 'chips' | 'price' | 'range' | 'structure' | 'signal' | 'events', string | null>
+    Record<'chan' | 'chips' | 'price' | 'range' | 'structure' | 'signal' | 'events' | 'limitUp' | 'volumeCompare' | 'drawLine', string | null>
   >({
     chan: null, chips: null, price: null, range: null, structure: null, signal: null, events: null,
+    limitUp: null, volumeCompare: null, drawLine: null,
   })
   /** 会话视口只重放一次(挂载/换股后), 之后交给用户自由滚动 */
   const vpAppliedRef = useRef(false)
@@ -358,6 +388,101 @@ export function KLinePro({
     else setInnerSignals(v)
   }, [onSignalsChange])
 
+  // 涨停/连板/炸板标记: 内部状态, 默认开。数据列始终随 K 线下发, 独立于信号开关。
+  const [limitUpOn, setLimitUpOn] = useState(true)
+
+  // 量能对比: 内部状态, localStorage 持久化(与旧 ECharts 侧 stockVolumeCompare 同 key)。
+  const [volumeCompare, setVolumeCompare] = useState(() =>
+    storage.stockVolumeCompare.get({ enabled: true, days: 1 }),
+  )
+  const volCmpDays = Math.max(1, Math.min(20, Math.round(Number(volumeCompare.days) || 1)))
+  const updateVolumeCompare = useCallback((patch: Partial<{ enabled: boolean; days: number }>) => {
+    setVolumeCompare(prev => {
+      const next = {
+        enabled: patch.enabled ?? prev.enabled,
+        days: Math.max(1, Math.min(20, Math.round(Number(patch.days ?? prev.days) || 1))),
+      }
+      storage.stockVolumeCompare.set(next)
+      return next
+    })
+  }, [])
+
+  // 手绘趋势线: 内部状态, 按 symbol 存 localStorage(见 draw-line-overlay 的 DrawLine)
+  const [drawing, setDrawing] = useState(false)
+  const [drawLines, setDrawLines] = useState<DrawLine[]>([])
+  const [drawPreview, setDrawPreview] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const dragRef = useRef<{ x: number; y: number; date: string; price: number } | null>(null)
+
+  // 切换个股时载入该股已保存的手绘线
+  useEffect(() => {
+    setDrawLines(symbol ? loadDrawLines(symbol) : [])
+    setDrawPreview(null)
+    dragRef.current = null
+  }, [symbol])
+
+  // 像素 → (日期, 价格): 鼠标坐标 snap 到最近交易日 + 主图价格(round 2 位)
+  const drawPixelToData = useCallback((clientX: number, clientY: number) => {
+    const el = containerRef.current
+    const chart = chartRef.current
+    if (!el || !chart) return null
+    const rect = el.getBoundingClientRect()
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+    const pts = chart.convertFromPixel([{ x, y }], { paneId: MAIN_PANE_ID })
+    const p = Array.isArray(pts) ? pts[0] : pts
+    const rows = rowsRef.current
+    if (!p || rows.length === 0) return null
+    if (typeof p.dataIndex !== 'number' || typeof p.value !== 'number') return null
+    const i = Math.max(0, Math.min(rows.length - 1, Math.round(p.dataIndex)))
+    return {
+      x,
+      y,
+      date: new Date(rows[i].timestamp).toISOString().slice(0, 10),
+      price: Math.round(p.value * 100) / 100,
+    }
+  }, [])
+
+  const handleDrawStart = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    const p = drawPixelToData(e.clientX, e.clientY)
+    if (!p) return
+    dragRef.current = p
+    setDrawPreview({ x1: p.x, y1: p.y, x2: p.x, y2: p.y })
+  }, [drawPixelToData])
+
+  const handleDrawMove = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return
+    const el = containerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    setDrawPreview(prev => (prev
+      ? { ...prev, x2: e.clientX - rect.left, y2: e.clientY - rect.top }
+      : prev))
+  }, [])
+
+  const handleDrawEnd = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    const start = dragRef.current
+    dragRef.current = null
+    setDrawPreview(null)
+    if (!start) return
+    const p = drawPixelToData(e.clientX, e.clientY)
+    if (!p) return
+    // 误点(同一位置)不成线
+    if (p.date === start.date && Math.abs(p.price - start.price) < 1e-9) return
+    setDrawLines(prev => {
+      const next = [...prev, {
+        a: { date: start.date, price: start.price },
+        b: { date: p.date, price: p.price },
+      }]
+      saveDrawLines(symbol, next)
+      return next
+    })
+  }, [drawPixelToData, symbol])
+
+  const handleDrawCancel = useCallback(() => {
+    dragRef.current = null
+    setDrawPreview(null)
+  }, [])
+
   const days = useMemo(() => {
     const s = new Date(dateRange.start), e = new Date(dateRange.end)
     return Math.max(1, Math.ceil((e.getTime() - s.getTime()) / 86400000) + 1)
@@ -367,7 +492,7 @@ export function KLinePro({
     // signalsOn 必须进 key: 打开信号标记要重新拉一次带 signal_* 列的响应,
     // 否则命中旧缓存(没有信号列)会导致图上什么都不标。
     queryKey: [...QK.kline(symbol, dateRange.start, dateRange.end, extColumns, period, adjust), signalsOn],
-    queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns, CUSTOM_INDICATORS, klineChartFields(signalsOn), period, adjust),
+    queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns, CUSTOM_INDICATORS, `${klineChartFields(signalsOn)},${LIMIT_UP_FIELDS}`, period, adjust),
     enabled: !!symbol && !minutePeriod,
   })
 
@@ -431,6 +556,7 @@ export function KLinePro({
     indRefs.current.clear()
     overlayIds.current = {
       chan: null, chips: null, price: null, range: null, structure: null, signal: null, events: null,
+      limitUp: null, volumeCompare: null, drawLine: null,
     }
     vpAppliedRef.current = false
     registerChanOverlay()
@@ -440,6 +566,9 @@ export function KLinePro({
     registerStructureOverlay()
     registerSignalMarkersOverlay()
     registerEventMarkersOverlay()
+    registerLimitUpMarkersOverlay()
+    registerVolumeCompareOverlay()
+    registerDrawLineOverlay()
 
     const chart = kc.init(el, { styles: buildStyles(ct) })
     if (!chart) return
@@ -749,6 +878,54 @@ export function KLinePro({
     }
   }, [eventMarks, eventRev, period, ready])
 
+  // ── 涨停/连板/炸板标记: 数据挂在 KLineData.limitUp 上, 从 getDataList 读 ──
+  // 只在日线档画: 周/月线是聚合结果(只留 OHLCV), 分钟档没有 signal 列。
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !ready) return
+    if (!limitUpOn || period !== 'day') {
+      if (overlayIds.current.limitUp) {
+        chart.removeOverlay({ id: overlayIds.current.limitUp })
+        overlayIds.current.limitUp = null
+      }
+      return
+    }
+    if (!overlayIds.current.limitUp) {
+      const first = rowsRef.current[0]
+      if (!first) return
+      const id = chart.createOverlay({
+        name: 'limitUpMarkers',
+        paneId: 'candle_pane',
+        points: [{ timestamp: first.timestamp, value: first.close }],
+        extendData: {},
+      })
+      if (typeof id === 'string') overlayIds.current.limitUp = id
+    } else {
+      chart.overrideOverlay({ id: overlayIds.current.limitUp, extendData: {} })
+    }
+  }, [limitUpOn, period, structRev, ready])
+
+  // ── 手绘趋势线: 数据来自 drawLines(按 symbol 持久化), 画在主图 ──
+  // 端点 date 是日线日期, 周/月轴找不到对应位置, 所以非日线档传空数组(不画)。
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !ready) return
+    const lines = period === 'day' ? drawLines : []
+    if (!overlayIds.current.drawLine) {
+      const first = rowsRef.current[0]
+      if (!first) return
+      const id = chart.createOverlay({
+        name: 'drawLine',
+        paneId: 'candle_pane',
+        points: [{ timestamp: first.timestamp, value: first.close }],
+        extendData: lines,
+      })
+      if (typeof id === 'string') overlayIds.current.drawLine = id
+    } else {
+      chart.overrideOverlay({ id: overlayIds.current.drawLine, extendData: lines })
+    }
+  }, [drawLines, period, ready])
+
   // ── 事件时间轴(P4-1): 上报日期序列与信号事件 ──────────────────
   // 时间轴挂在终端层, 拿不到渲染器内部的 rows; 反过来让终端层再拉一次日K是重复
   // 请求。所以只上报「一条日期数组 + 已归约好的信号事件」, 两边指纹相同就不通知
@@ -826,6 +1003,42 @@ export function KLinePro({
     }
     applyPaneHeights(chart)
   }, [indicators, ready])
+
+  // ── 量能对比: 挂在成交量(VOL)副图, paneId 从 indRefs 反查 ──
+  // 必须在指标 diff effect 之后定义, 否则首帧 indRefs 还没填 VOL 的 paneId。
+  // structRev 进 rev 字段做重绘信号(数据刷新后量比标签要跟着重算)。
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !ready) return
+    // 从已挂载指标里找 VOL 所在 pane
+    let volPaneId: string | null = null
+    for (const c of indicators) {
+      if (c.name !== 'VOL') continue
+      const ref = indRefs.current.get(c.key)
+      if (ref?.paneId) { volPaneId = ref.paneId; break }
+    }
+    if (!volumeCompare.enabled || !volPaneId) {
+      if (overlayIds.current.volumeCompare) {
+        chart.removeOverlay({ id: overlayIds.current.volumeCompare })
+        overlayIds.current.volumeCompare = null
+      }
+      return
+    }
+    const first = rowsRef.current[0]
+    if (!first) return
+    const payload: VolumeComparePayload = { days: volCmpDays, rev: structRev }
+    if (!overlayIds.current.volumeCompare) {
+      const id = chart.createOverlay({
+        name: 'volumeCompare',
+        paneId: volPaneId,
+        points: [{ timestamp: first.timestamp, value: 0 }],
+        extendData: payload,
+      })
+      if (typeof id === 'string') overlayIds.current.volumeCompare = id
+    } else {
+      chart.overrideOverlay({ id: overlayIds.current.volumeCompare, extendData: payload })
+    }
+  }, [volumeCompare.enabled, volCmpDays, indicators, ready, structRev])
 
   // 指标清单落盘。默认清单也要写 —— 否则 store 只有用户改过之后才有值,
   // 排查时看到的是空 localStorage, 与图上实际有指标对不上。
@@ -964,6 +1177,82 @@ export function KLinePro({
             信号
           </button>
         )}
+        {!hideOverlayToggles && (
+          <button
+            type="button"
+            onClick={() => setLimitUpOn(v => !v)}
+            disabled={period !== 'day'}
+            title={period !== 'day'
+              ? '涨停标记基于日K signal 列: 周/月线是聚合结果, 分钟档没有'
+              : limitUpOn ? '隐藏涨停/连板/炸板标记' : '显示涨停/连板/炸板标记(板/N/炸)'}
+            className={cn(
+              'h-6 rounded border px-1.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+              limitUpOn && period === 'day'
+                ? 'border-[#FACC15]/40 bg-[#FACC15]/15 font-medium text-[#FACC15]'
+                : 'border-transparent text-muted hover:bg-elevated hover:text-foreground',
+              period !== 'day' && 'cursor-not-allowed opacity-40',
+            )}
+          >
+            涨停
+          </button>
+        )}
+        {!hideOverlayToggles && (
+          <div className="flex items-center gap-1 border-l border-border/70 pl-1.5">
+            <button
+              type="button"
+              onClick={() => updateVolumeCompare({ enabled: !volumeCompare.enabled })}
+              title={volumeCompare.enabled
+                ? '关闭量能对比(成交量柱顶「量比 N」标签)'
+                : '开启量能对比(成交量柱顶「量比 N」标签)'}
+              className={cn(
+                'h-6 rounded border px-1.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+                volumeCompare.enabled
+                  ? 'border-accent/30 bg-accent/20 font-medium text-accent'
+                  : 'border-transparent text-muted hover:bg-elevated hover:text-foreground',
+              )}
+            >
+              量比
+            </button>
+            <select
+              value={volCmpDays}
+              disabled={!volumeCompare.enabled}
+              onChange={e => updateVolumeCompare({ days: Number(e.target.value) })}
+              title="量比窗口: 当前量 / 前 N 个交易日均量"
+              className="h-6 rounded border border-border bg-base px-1 text-[10px] text-secondary outline-none disabled:opacity-40"
+            >
+              {Array.from({ length: 20 }, (_, i) => i + 1).map(d => (
+                <option key={d} value={d}>前{d}日均量</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => { setDrawing(v => !v); setDrawPreview(null); dragRef.current = null }}
+          disabled={minutePeriod}
+          title={minutePeriod
+            ? '画线基于日线日期, 分钟档不可用'
+            : drawing ? '退出画线模式' : '画线: 在 K 线区按住鼠标拖出趋势线'}
+          className={cn(
+            'h-6 rounded border px-1.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+            drawing
+              ? 'border-accent/30 bg-accent text-white'
+              : 'border-transparent text-muted hover:bg-elevated hover:text-foreground',
+            minutePeriod && 'cursor-not-allowed opacity-40',
+          )}
+        >
+          {drawing ? '画线中' : '画线'}
+        </button>
+        {drawLines.length > 0 && (
+          <button
+            type="button"
+            onClick={() => { setDrawLines([]); saveDrawLines(symbol, []) }}
+            title={`清除本股已画的 ${drawLines.length} 条线`}
+            className="h-6 rounded border px-1.5 text-[11px] border-transparent text-muted hover:text-danger hover:bg-elevated transition-colors"
+          >
+            清除({drawLines.length})
+          </button>
+        )}
         {chipsOn && !minutePeriod && chips.data?.ok && (
           <span className="ml-1 text-[10px] text-muted" title="平均成本 / 获利盘比例">
             成本 {chips.data.avg_cost?.toFixed(2) ?? '—'} · 获利{' '}
@@ -989,6 +1278,28 @@ export function KLinePro({
           </div>
         )}
         <div ref={containerRef} className="h-full w-full" />
+        {drawing && (
+          <div
+            className="absolute inset-0 z-10 cursor-crosshair"
+            onMouseDown={handleDrawStart}
+            onMouseMove={handleDrawMove}
+            onMouseUp={handleDrawEnd}
+            onMouseLeave={handleDrawCancel}
+          >
+            {drawPreview && (
+              <svg className="pointer-events-none absolute inset-0 h-full w-full">
+                <line
+                  x1={drawPreview.x1}
+                  y1={drawPreview.y1}
+                  x2={drawPreview.x2}
+                  y2={drawPreview.y2}
+                  stroke={DRAW_COLOR}
+                  strokeWidth={1.5}
+                />
+              </svg>
+            )}
+          </div>
+        )}
         {managerOpen && (
           <IndicatorManager
             configs={indicators}
