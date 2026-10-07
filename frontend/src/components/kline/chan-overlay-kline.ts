@@ -9,8 +9,8 @@ import type { ChartMarker, ChartPolyline, ChartRange } from '@/lib/chart-primiti
 
 const BULL = '#F04438' // 红涨
 const BEAR = '#12B76A' // 绿跌
-const CENTER_FILL = 'rgba(59,130,246,0.12)'
-const CENTER_EDGE = '#60A5FA'
+const CENTER_FILL = 'rgba(245,158,11,0.16)'
+const CENTER_EDGE = '#f59e0b'
 
 interface ChanPayload {
   polylines: ChartPolyline[]
@@ -83,7 +83,7 @@ export function registerChanOverlay() {
         figs.push({
           type: 'rect',
           attrs: { x, y, width: w, height: h },
-          styles: { style: 'fill', color: r.color || CENTER_FILL, borderColor: CENTER_EDGE, borderSize: 1 },
+          styles: { style: 'fill', color: r.color || CENTER_FILL, borderColor: CENTER_EDGE, borderSize: 1.5 },
         })
         for (const price of [zg, zd]) {
           const p1 = P(sTs, price), p2 = P(eTs, price)
@@ -91,7 +91,7 @@ export function registerChanOverlay() {
           figs.push({
             type: 'line',
             attrs: { coordinates: [{ x: p1.x, y: p1.y }, { x: p2.x, y: p2.y }] },
-            styles: { color: CENTER_EDGE, size: 1, style: 'dashed', dashedValue: [4, 3] },
+            styles: { color: CENTER_EDGE, size: 1.2, style: 'dashed', dashedValue: [4, 3] },
           })
         }
       }

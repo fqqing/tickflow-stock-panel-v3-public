@@ -74,6 +74,21 @@ def _serialize(analysis, dates: list[str], symbol: str, name: str | None) -> dic
         }
         for c in analysis.centers
     ]
+    segments = [
+        {
+            "start_stroke": s.start_stroke,
+            "end_stroke": s.end_stroke,
+            "start_index": s.start_index,
+            "end_index": s.end_index,
+            "start_date": dates[s.start_index] if s.start_index < len(dates) else None,
+            "end_date": dates[s.end_index] if s.end_index < len(dates) else None,
+            "start_price": round(s.start_price, 4),
+            "end_price": round(s.end_price, 4),
+            "direction": s.direction,
+            "stroke_count": s.stroke_count,
+        }
+        for s in analysis.segments
+    ]
     signals = []
     for s in analysis.signals:
         center = analysis.centers[s.center_pos] if s.center_pos is not None and s.center_pos < len(analysis.centers) else None
@@ -115,12 +130,14 @@ def _serialize(analysis, dates: list[str], symbol: str, name: str | None) -> dic
         "sell_snapshot": _snap_payload(sell_snap),
         "strokes": strokes,
         "centers": centers,
+        "segments": segments,
         "signals": signals,
         "counts": {
             "merged": len(analysis.merged),
             "fractals": len(analysis.fractals),
             "strokes": len(strokes),
             "centers": len(centers),
+            "segments": len(segments),
             "signals": len(signals),
         },
     }

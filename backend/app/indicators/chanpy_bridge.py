@@ -34,6 +34,7 @@ from app.indicators.chan import (
     ChanAnalysis,
     ChanSignal,
     MergedBar,
+    Segment,
     Stroke,
     _build_snapshot,
     _classify_trend,
@@ -119,6 +120,29 @@ def _map_centers(zs_list) -> tuple[Center, ...]:
     return tuple(out)
 
 
+def _map_segments(seg_list) -> tuple[Segment, ...]:
+    """chan.py 线段 → v1 Segment。端点索引取起笔起点 / 终笔终点（last 口径，对齐笔）。
+
+    1~2 笔的过渡态线段仍保留（前端按 stroke_count 过滤渲染），信息不丢。
+    """
+    out: list[Segment] = []
+    for seg in seg_list:
+        begin_bi, end_bi = seg.start_bi, seg.end_bi
+        out.append(
+            Segment(
+                start_stroke=int(begin_bi.idx),
+                end_stroke=int(end_bi.idx),
+                start_index=int(begin_bi.begin_klc.lst[-1].idx),
+                end_index=int(end_bi.end_klc.lst[-1].idx),
+                start_price=float(seg.get_begin_val()),
+                end_price=float(seg.get_end_val()),
+                direction=1 if seg.is_up() else -1,
+                stroke_count=len(seg.bi_list),
+            )
+        )
+    return tuple(out)
+
+
 def _bsp_features(bsp) -> dict[str, float]:
     """把 chan.py 的 CFeatures 摊平成 dict，便于判断 divergence_rate 等标志。"""
     return dict(bsp.features.items())
@@ -181,6 +205,7 @@ def analyze_via_chanpy(
     elements = level_elements(chan, 0)
     strokes = _map_strokes(elements["bi"])
     centers = _map_centers(elements["zs"])
+    segments = _map_segments(elements["seg"])
     signals = _map_signals(elements["bsp"])
     merged = _map_merged(elements["merged"])
 
@@ -196,6 +221,7 @@ def analyze_via_chanpy(
         fractals=(),
         strokes=strokes,
         centers=centers,
+        segments=segments,
         signals=signals,
         trend=trend,
         snapshot=snapshot,

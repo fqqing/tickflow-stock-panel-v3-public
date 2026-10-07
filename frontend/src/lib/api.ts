@@ -605,6 +605,21 @@ export interface ChanCenter {
   stroke_count: number
 }
 
+export interface ChanSegment {
+  start_stroke: number
+  end_stroke: number
+  start_index: number
+  end_index: number
+  start_date: string | null
+  end_date: string | null
+  start_price: number
+  end_price: number
+  /** +1 向上线段, -1 向下线段 */
+  direction: number
+  /** 包含笔数, 1~2 为过渡态(渲染时跳过) */
+  stroke_count: number
+}
+
 /** 「当下点位」快照: 买点用 snapshot, 卖点用 sell_snapshot, 结构完全对称 */
 export interface ChanSnapshotPayload {
   kind: string | null
@@ -628,6 +643,7 @@ export interface ChanAnalysis {
   sell_snapshot: ChanSnapshotPayload
   strokes: ChanStrokePoint[]
   centers: ChanCenter[]
+  segments: ChanSegment[]
   signals: ChanSignalPoint[]
   counts: Record<string, number>
 }

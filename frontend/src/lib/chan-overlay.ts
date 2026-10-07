@@ -13,14 +13,14 @@
  * 图外裁剪：图表日期序列是缠论日期序列的连续子段，落在图外的端点裁剪到图边界并按
  * 笔的两个端点线性插值价格，避免因为端点在图外而整条笔消失。
  */
-import type { ChanAnalysis, ChanStrokePoint } from '@/lib/api'
+import type { ChanAnalysis } from '@/lib/api'
 import type { ChartMarker, ChartPolyline, ChartPriceLine, ChartRange } from '@/lib/chart-primitives'
 
 const STROKE_UP_COLOR = '#F87171'
 const STROKE_DOWN_COLOR = '#34D399'
-const CENTER_FILL = 'rgba(59,130,246,0.10)'
-const CENTER_EDGE = '#60A5FA'
-const CENTER_EDGE_STRONG = '#3B82F6'
+const CENTER_FILL = 'rgba(245,158,11,0.16)'
+const CENTER_EDGE = '#f59e0b'
+const CENTER_EDGE_STRONG = '#d97706'
 
 /** 笔/中枢数量上限：正常 400 根 K 线只有 30 笔 / 8 中枢，这里是极端保护 */
 const MAX_STROKES = 400
@@ -47,8 +47,11 @@ export const EMPTY_CHAN_OVERLAY: ChanOverlayLayers = {
   polylines: [],
 }
 
-/** 取笔上某个缠论索引处的价格（按两个端点线性插值） */
-function priceAt(stroke: ChanStrokePoint, chanIndex: number): number {
+/** 取笔/线段上某个缠论索引处的价格（按两个端点线性插值） */
+function priceAt(
+  stroke: { start_index: number; end_index: number; start_price: number; end_price: number },
+  chanIndex: number,
+): number {
   const span = stroke.end_index - stroke.start_index
   if (span <= 0) return stroke.end_price
   const t = Math.min(Math.max((chanIndex - stroke.start_index) / span, 0), 1)
@@ -78,6 +81,38 @@ export function buildChanOverlay(
 
   const polylines: ChartPolyline[] = []
   const ranges: ChartRange[] = []
+
+  // ── 线段（画在笔下面，比笔粗，一眼区分级别）──────────────
+  const SEGMENT_COLOR = '#1d4ed8'
+  const SEGMENT_WIDTH = 2.4
+  if (showStrokes) {
+    for (const seg of analysis.segments ?? []) {
+      if (seg.stroke_count < 3) continue // 1~2 笔是过渡态，画出来会误导
+      let startDate = seg.start_date
+      let startPrice = seg.start_price
+      let endDate = seg.end_date
+      let endPrice = seg.end_price
+      if (chanLeft != null && seg.start_index < chanLeft) {
+        startDate = leftDate
+        startPrice = priceAt(seg, chanLeft)
+      }
+      if (chanRight != null && seg.end_index > chanRight) {
+        endDate = rightDate
+        endPrice = priceAt(seg, chanRight)
+      }
+      if (!startDate || !endDate || startDate === endDate) continue
+      if (!chartSet.has(startDate) || !chartSet.has(endDate)) continue
+      polylines.push({
+        name: seg.direction > 0 ? 'chan-seg-up' : 'chan-seg-down',
+        points: [
+          { date: startDate, price: startPrice },
+          { date: endDate, price: endPrice },
+        ],
+        color: SEGMENT_COLOR,
+        width: SEGMENT_WIDTH,
+      })
+    }
+  }
 
   // ── 笔 ────────────────────────────────────────────────────────
   if (showStrokes) {

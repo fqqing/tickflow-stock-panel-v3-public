@@ -145,6 +145,30 @@ class Center:
 
 
 @dataclass(frozen=True, slots=True)
+class Segment:
+    """线段。由至少三笔构成（1~2 笔的过渡态前端不渲染）。
+
+    来自 chan.py 引擎 (CSeg), 自研 analyze 不产线段 (传空 tuple)。
+    """
+
+    start_stroke: int
+    """起始笔在 ``strokes`` 中的序号。"""
+
+    end_stroke: int
+    """结束笔在 ``strokes`` 中的序号。"""
+
+    start_index: int
+    end_index: int
+    start_price: float
+    end_price: float
+    direction: int
+    """+1 向上线段, -1 向下线段。"""
+
+    stroke_count: int
+    """包含笔数。1~2 笔为过渡态。"""
+
+
+@dataclass(frozen=True, slots=True)
 class ChanSignal:
     """缠论买卖点。``index`` 为信号确认的原始 K 线索引 (通常落在笔的终点)。"""
 
@@ -190,6 +214,7 @@ class ChanAnalysis:
     fractals: tuple[Fractal, ...]
     strokes: tuple[Stroke, ...]
     centers: tuple[Center, ...]
+    segments: tuple[Segment, ...]
     signals: tuple[ChanSignal, ...]
     trend: str
     snapshot: ChanSnapshot
@@ -756,6 +781,7 @@ def analyze(
         fractals=tuple(fractals),
         strokes=tuple(strokes),
         centers=tuple(centers),
+        segments=(),
         signals=tuple(signals),
         trend=trend,
         snapshot=snapshot,
