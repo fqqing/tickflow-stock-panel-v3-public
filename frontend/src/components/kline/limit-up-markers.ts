@@ -43,8 +43,11 @@ export function registerLimitUpMarkersOverlay(): void {
       let from = 0
       let to = data.length - 1
       if (xAxis) {
-        const left = xAxis.convertTimestampFromPixel(bounding.left)
-        const right = xAxis.convertTimestampFromPixel(bounding.right)
+        // ★ bounding 是 pane main widget 的 bounding：left/right 是左右 y 轴宽度(inset)，
+        //   不是 pane-local 像素。xAxis 的像素空间是 [0, bounding.width]，误用 bounding.left/right
+        //   会把右边界算成「左起 ~几十 px」，导致 to 塌缩到最左、右端(涨停往往在最右)整片漏画。
+        const left = xAxis.convertTimestampFromPixel(0)
+        const right = xAxis.convertTimestampFromPixel(bounding.width)
         if (left != null && Number.isFinite(left)) {
           while (from < to && data[from].timestamp < left) from += 1
           from = Math.max(0, from - 1)

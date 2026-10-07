@@ -38,13 +38,14 @@ export function registerPriceLineOverlay() {
         if (!pa || !pb) continue
         figs.push({
           type: 'line',
-          attrs: { coordinates: [{ x: bounding.left, y: pa.y }, { x: bounding.right, y: pb.y }] },
+          // bounding.left/right 是 y 轴宽度(inset)而非 pane-local 像素，水平线应从 0 画到 bounding.width
+          attrs: { coordinates: [{ x: 0, y: pa.y }, { x: bounding.width, y: pb.y }] },
           styles: { color: pl.color || '#F79009', size: 1.5, style: 'solid' },
         })
         if (pl.label) {
           figs.push({
             type: 'text',
-            attrs: { x: bounding.right - 4, y: pa.y - 6, text: pl.label, align: 'right', baseline: 'bottom' },
+            attrs: { x: bounding.width - 4, y: pa.y - 6, text: pl.label, align: 'right', baseline: 'bottom' },
             styles: { color: pl.color || '#F79009', size: 11 },
           })
         }

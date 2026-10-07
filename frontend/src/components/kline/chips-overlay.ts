@@ -59,7 +59,8 @@ export function registerChipsOverlay() {
 
       const maxRatio = Math.max(...d.bins.map(b => b.ratio))
       if (!(maxRatio > 0)) return []
-      const barW = (bounding.right - bounding.left) * WIDTH_RATIO
+      // bounding.left/right 是 y 轴宽度(inset)而非 pane-local 像素，窗格可视宽 = bounding.width
+      const barW = bounding.width * WIDTH_RATIO
       const figs: kc.OverlayFigure[] = []
 
       // 条高: 优先用真实价格档宽换算的像素高, 退化时按档数均分
@@ -85,7 +86,7 @@ export function registerChipsOverlay() {
         const color = d.close != null && b.price < d.close ? PROFIT : LOCKED
         figs.push({
           type: 'rect',
-          attrs: { x: bounding.right - w, y: y - barH / 2, width: w, height: barH },
+          attrs: { x: bounding.width - w, y: y - barH / 2, width: w, height: barH },
           styles: { style: 'fill', color },
         })
       })
@@ -97,16 +98,16 @@ export function registerChipsOverlay() {
           const left = chart.convertToPixel(
             { timestamp: firstTs, value: d.avg_cost }, { paneId: 'candle_pane' },
           )
-          const x0 = Array.isArray(left) || left == null || left.x == null ? bounding.left : left.x
+          const x0 = Array.isArray(left) || left == null || left.x == null ? 0 : left.x
           figs.push({
             type: 'line',
-            attrs: { coordinates: [{ x: x0, y }, { x: bounding.right, y }] },
+            attrs: { coordinates: [{ x: x0, y }, { x: bounding.width, y }] },
             styles: { color: AVG_LINE, size: 1, style: 'dashed', dashedValue: [4, 3] },
           })
           figs.push({
             type: 'text',
             attrs: {
-              x: bounding.right - 4, y: y - 4, text: `平均成本 ${d.avg_cost.toFixed(2)}`,
+              x: bounding.width - 4, y: y - 4, text: `平均成本 ${d.avg_cost.toFixed(2)}`,
               align: 'right', baseline: 'bottom',
             },
             styles: { color: AVG_LINE, size: 11 },

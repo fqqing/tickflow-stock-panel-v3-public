@@ -38,13 +38,15 @@ export function registerRangeOverlay() {
         if (w <= 0) continue
         figs.push({
           type: 'rect',
-          attrs: { x, y: bounding.top, width: w, height: Math.max(0, bounding.bottom - bounding.top) },
+          // 竖向色块应从窗格顶部铺到底部：pane-local y 起点是 0，高 = bounding.height
+          // (bounding.top 是 pane 在图表里的纵向偏移、bounding.bottom 恒为 0，二者都不是窗格内像素)
+          attrs: { x, y: 0, width: w, height: bounding.height },
           styles: { style: 'fill', color: r.color || 'rgba(59,130,246,0.07)' },
         })
         if (r.label) {
           figs.push({
             type: 'text',
-            attrs: { x: x + 3, y: bounding.top + 4, text: r.label, align: 'left', baseline: 'top' },
+            attrs: { x: x + 3, y: 4, text: r.label, align: 'left', baseline: 'top' },
             styles: { color: '#60A5FA', size: 11 },
           })
         }

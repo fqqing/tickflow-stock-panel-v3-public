@@ -63,8 +63,9 @@ export function registerEventMarkersOverlay(): void {
       let from = 0
       let to = data.length - 1
       if (xAxis) {
-        const left = xAxis.convertTimestampFromPixel(bounding.left)
-        const right = xAxis.convertTimestampFromPixel(bounding.right)
+        // bounding.left/right 是 y 轴宽度(inset)而非 pane-local 像素，xAxis 像素空间是 [0, bounding.width]
+        const left = xAxis.convertTimestampFromPixel(0)
+        const right = xAxis.convertTimestampFromPixel(bounding.width)
         if (left != null && Number.isFinite(left)) {
           while (from < to && data[from].timestamp < left) from += 1
           from = Math.max(0, from - 1)

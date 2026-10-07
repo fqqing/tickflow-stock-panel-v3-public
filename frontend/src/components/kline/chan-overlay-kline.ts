@@ -50,7 +50,8 @@ export function registerChanOverlay() {
         const pb = P(new Date(b.date).getTime(), b.price)
         if (!pa || !pb) continue
         // 完全在可视区外则跳过, 避免巨大坐标撑 canvas
-        if ((pa.x < bounding.left && pb.x < bounding.left) || (pa.x > bounding.right && pb.x > bounding.right)) continue
+        // (bounding.left/right 是 y 轴宽度 inset，不是像素，可视 x 区间是 [0, bounding.width])
+        if ((pa.x < 0 && pb.x < 0) || (pa.x > bounding.width && pb.x > bounding.width)) continue
         figs.push({
           type: 'line',
           attrs: { coordinates: [{ x: pa.x, y: pa.y }, { x: pb.x, y: pb.y }] },
