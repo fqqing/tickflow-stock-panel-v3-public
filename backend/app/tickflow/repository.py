@@ -46,7 +46,11 @@ _HISTORY_WARMUP_BARS = 60
 # 预计算窗口: 需覆盖 最长 lookback(261) + warmup(60) = 321 个交易日。
 # 321 交易日 ≈ 449 日历日, 留出节假日余量取 480。
 # (2026-09-18: upward_trend_breakout 的实测收敛点把最长 lookback 从 201 抬到 261)
-_REFRESH_HISTORY_DAYS = 480
+# 2026-10-07: K 线带自定义指标时 _attach_indicators 需 540 天 warmup
+# (structure/macd_structure), 叠加前端默认 6 个月区间, 取数起点最远到 ~724 日历日前。
+# 为让 get_daily 快路径直接命中内存缓存(免扫描 540 个按日期分区的 parquet 文件),
+# 窗口扩到 750 覆盖该范围。代价: 启动预计算 +~50% 时长、缓存内存 +~250MB。
+_REFRESH_HISTORY_DAYS = 750
 
 def enriched_dirname(asset_type: str, market: str = "cn") -> str:
     """asset_type + market → enriched parquet 目录名。
@@ -1578,7 +1582,12 @@ class KlineRepository:
         # 仍用 enriched_latest 缓存覆盖最新日 (盘中更准), 只保留请求列。
         # 试探 scan 仅读请求的列; 缺列时回退到下方完整计算路径 (代价仅一次轻量 scan)。
         if columns:
-            df = self._scan_daily_symbol(symbol, start, end, columns)
+            # 优先命中内存 enriched 历史缓存(覆盖 _REFRESH_HISTORY_DAYS 天) —— K 线带
+            # 指标 warmup(540 天) 的取数若命中此处, 免扫描 540 个按日期分区的 parquet
+            # 文件, 首次打开 K 线也从 2.6s 降到 ~10ms。未命中才回退 scan。
+            df = self._history_cache_range(symbol, start, end, columns)
+            if df is None:
+                df = self._scan_daily_symbol(symbol, start, end, columns)
             if not df.is_empty() and all(c in df.columns for c in columns):
                 cached, cache_date = self.get_enriched_latest()
                 if cached is not None and not cached.is_empty() and cache_date:
@@ -1949,6 +1958,32 @@ class KlineRepository:
             existing = [c for c in columns if c in df.columns]
             df = df.select(existing)
         return df.sort(["symbol", "date"])
+
+    def _history_cache_range(
+        self, symbol: str, start: date, end: date, columns: list[str]
+    ) -> pl.DataFrame | None:
+        """尝试从 _enriched_history_cache 命中 [start, end] 的单票区间。
+
+        命中则返回 select(columns) 后的 DataFrame; 未命中(缓存为空 / 不覆盖 start /
+        缺列 / 该票无数据)返回 None, 调用方回退 _scan_daily_symbol。
+        这是 K 线带指标 warmup 取数(540 天)免扫描按日期分区 parquet 的关键:
+        _REFRESH_HISTORY_DAYS 覆盖足够长时, 首次打开 K 线也走内存 filter。
+        """
+        hist = self._enriched_history_cache
+        if hist is None or hist.is_empty() or "date" not in hist.columns:
+            return None
+        hist_min = self._enriched_history_start
+        if hist_min is None or hist_min > start:
+            return None  # 缓存起始晚于请求 start, 覆盖不足
+        avail = [c for c in columns if c in hist.columns]
+        if not avail:
+            return None
+        df = hist.filter(
+            (pl.col("symbol") == symbol)
+            & (pl.col("date") >= start)
+            & (pl.col("date") <= end)
+        ).select(avail)
+        return df if not df.is_empty() else None
 
     def _scan_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
