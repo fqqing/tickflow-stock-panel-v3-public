@@ -25,7 +25,9 @@ export interface IndicatorMeta {
 }
 
 /**
- * 内置指标清单(getSupportedIndicators() 实测返回 27 个, 全部登记)。
+ * 指标清单 = 内置 27 个(getSupportedIndicators() 实测) + 3 个自定义。
+ * 自定义指标见 components/kline/custom-indicators.ts(registerIndicator 注册)：
+ *   MOMENTUM 资金动能 / MACD_QUANT MACD定量结构 / DRAGON 蛟龙出海。
  * 分组只影响创建时挂到哪个窗格: main -> candle_pane(叠在主图), sub -> 新建副图窗格。
  */
 export const INDICATOR_METAS: IndicatorMeta[] = [
@@ -37,9 +39,12 @@ export const INDICATOR_METAS: IndicatorMeta[] = [
   { name: 'BBI', cn: '多空均线', group: 'main', labels: ['周期', '周期', '周期', '周期'] },
   { name: 'SAR', cn: '抛物线转向', group: 'main', labels: ['起始', '步长', '极值'] },
   { name: 'AVP', cn: '平均价格', group: 'main', labels: ['周期'] },
+  { name: 'DRAGON', cn: '蛟龙出海', group: 'main' },
   // ── 副图 ──
   { name: 'VOL', cn: '成交量', group: 'sub', labels: ['均线周期', '均线周期', '均线周期'] },
   { name: 'MACD', cn: '指数平滑异同', group: 'sub', labels: ['快线', '慢线', '信号'] },
+  { name: 'MACD_QUANT', cn: 'MACD定量结构', group: 'sub' },
+  { name: 'MOMENTUM', cn: '资金动能', group: 'sub' },
   { name: 'KDJ', cn: '随机指标', group: 'sub', labels: ['周期', 'K', 'D'] },
   { name: 'RSI', cn: '相对强弱', group: 'sub', labels: ['周期', '周期', '周期'] },
   { name: 'WR', cn: '威廉指标', group: 'sub', labels: ['周期', '周期', '周期'] },

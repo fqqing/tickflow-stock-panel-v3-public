@@ -61,7 +61,9 @@ import {
 } from './event-markers'
 import { registerLimitUpMarkersOverlay, type LimitUpData } from './limit-up-markers'
 import { registerVolumeCompareOverlay, type VolumeComparePayload } from './volume-compare'
+import { registerDragonMarkersOverlay } from './dragon-markers'
 import { registerDrawLineOverlay, DRAW_COLOR, type DrawLine } from './draw-line-overlay'
+import { registerCustomIndicators } from './custom-indicators'
 import { IndicatorManager } from './IndicatorManager'
 import {
   MAIN_PANE_ID,
@@ -182,6 +184,19 @@ function rowToKLine(r: KlineRow): kc.KLineData | null {
     st_icon: r.st_icon ?? 0,
     st_dn: r.st_dn ?? 0,
     st_up: r.st_up ?? 0,
+    // 自定义指标字段: 蛟龙出海(生命线 MA10 + 信号)、资金动能、MACD 定量结构。
+    // 由 registerIndicator 的 calc 直接读, 前端不重算(指标归属后端)。
+    ma10: r.ma10 ?? null,
+    td_signal: r.td_signal ?? false,
+    td_a3: r.td_a3 ?? null,
+    cm_value: r.cm_value ?? null,
+    ms_diff: r.ms_diff ?? null,
+    ms_dea: r.ms_dea ?? null,
+    ms_hist: r.ms_hist ?? null,
+    ms_btext: r.ms_btext ?? 0,
+    ms_by: r.ms_by ?? null,
+    ms_ttext: r.ms_ttext ?? 0,
+    ms_ty: r.ms_ty ?? null,
     // 涨停标记: 炸板优先, 其次涨停(连板数)。数据来自 signal_* 布尔列 + consecutive_limit_ups
     limitUp: r.signal_broken_limit_up
       ? ({ kind: 'break', boards: 0 } as LimitUpData)
@@ -348,10 +363,10 @@ export function KLinePro({
    *   走 overrideOverlay 分支会打到不存在的 id 上, 表现是「换股后叠加层静默消失」。
    */
   const overlayIds = useRef<
-    Record<'chan' | 'chips' | 'price' | 'range' | 'structure' | 'signal' | 'events' | 'limitUp' | 'volumeCompare' | 'drawLine', string | null>
+    Record<'chan' | 'chips' | 'price' | 'range' | 'structure' | 'signal' | 'events' | 'limitUp' | 'volumeCompare' | 'drawLine' | 'dragon', string | null>
   >({
     chan: null, chips: null, price: null, range: null, structure: null, signal: null, events: null,
-    limitUp: null, volumeCompare: null, drawLine: null,
+    limitUp: null, volumeCompare: null, drawLine: null, dragon: null,
   })
   /** 会话视口只重放一次(挂载/换股后), 之后交给用户自由滚动 */
   const vpAppliedRef = useRef(false)
@@ -556,7 +571,7 @@ export function KLinePro({
     indRefs.current.clear()
     overlayIds.current = {
       chan: null, chips: null, price: null, range: null, structure: null, signal: null, events: null,
-      limitUp: null, volumeCompare: null, drawLine: null,
+      limitUp: null, volumeCompare: null, drawLine: null, dragon: null,
     }
     vpAppliedRef.current = false
     registerChanOverlay()
@@ -568,7 +583,9 @@ export function KLinePro({
     registerEventMarkersOverlay()
     registerLimitUpMarkersOverlay()
     registerVolumeCompareOverlay()
+    registerDragonMarkersOverlay()
     registerDrawLineOverlay()
+    registerCustomIndicators()
 
     const chart = kc.init(el, { styles: buildStyles(ct) })
     if (!chart) return
@@ -904,6 +921,36 @@ export function KLinePro({
       chart.overrideOverlay({ id: overlayIds.current.limitUp, extendData: {} })
     }
   }, [limitUpOn, period, structRev, ready])
+
+  // ── 蛟龙出海信号标记: 跟随指标面板是否添加了 DRAGON 指标 ──
+  // 信号点数据挂 KLineData.td_signal(rowToKLine), overlay 从 getDataList 读;
+  // DRAGON 指标本体只画生命线 + 信息栏, 信号点走 overlay(见 dragon-markers.ts
+  // 顶部说明 —— 指标 figure 对条件性显示存在坐标管道问题)。仅日线档画。
+  const hasDragon = useMemo(() => indicators.some(c => c.name === 'DRAGON'), [indicators])
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !ready) return
+    if (!hasDragon || period !== 'day') {
+      if (overlayIds.current.dragon) {
+        chart.removeOverlay({ id: overlayIds.current.dragon })
+        overlayIds.current.dragon = null
+      }
+      return
+    }
+    if (!overlayIds.current.dragon) {
+      const first = rowsRef.current[0]
+      if (!first) return
+      const id = chart.createOverlay({
+        name: 'dragonMarkers',
+        paneId: 'candle_pane',
+        points: [{ timestamp: first.timestamp, value: first.close }],
+        extendData: {},
+      })
+      if (typeof id === 'string') overlayIds.current.dragon = id
+    } else {
+      chart.overrideOverlay({ id: overlayIds.current.dragon, extendData: {} })
+    }
+  }, [hasDragon, period, structRev, ready])
 
   // ── 手绘趋势线: 数据来自 drawLines(按 symbol 持久化), 画在主图 ──
   // 端点 date 是日线日期, 周/月轴找不到对应位置, 所以非日线档传空数组(不画)。
