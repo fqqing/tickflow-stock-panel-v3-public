@@ -12,7 +12,13 @@ import numpy as np
 import polars as pl
 
 from app.backtest.matrix import build_market_data_matrix
-from app.signallab.lab import signal_name_column
+from app.signallab.lab import (
+    beautify_attribution_rows,
+    default_attribution_features,
+    signal_flag_column_names,
+    signal_flag_columns,
+    signal_name_column,
+)
 from app.strategy.signals.backend import SignalComboStrategy
 
 
@@ -111,3 +117,78 @@ def test_signal_name_column_falls_back_to_signal_cn():
     assert out.to_list() == [
         "缠论一买", "缠论二买", "缠论三买", "缠论一买+缠论二买+缠论三买", None,
     ]
+
+
+# ===== 信号函数独立布尔列展开 =====
+
+
+def test_signal_flag_column_names():
+    assert signal_flag_column_names(("ma_golden_cross", "vol_ratio_ge")) == (
+        "sig_ma_golden_cross", "sig_vol_ratio_ge",
+    )
+
+
+def test_signal_flag_columns_expands_mask_to_booleans():
+    codes = pl.Series("entry_signal_code", [7, 1, 2, 3, 0, -1, None], dtype=pl.Int64)
+    ids = ("ma_golden_cross", "vol_ratio_ge", "close_above_ma60")
+    frame = signal_flag_columns(codes, ids)
+    assert frame.columns == ["sig_ma_golden_cross", "sig_vol_ratio_ge", "sig_close_above_ma60"]
+    assert frame.height == 7
+    # 7 = 0b111 → 三列全命中；1 = 0b001 → 只有第一位命中；2 = 0b010 → 只有第二位。
+    assert frame["sig_ma_golden_cross"].to_list() == [True, True, False, True, None, None, None]
+    assert frame["sig_vol_ratio_ge"].to_list() == [True, False, True, True, None, None, None]
+    assert frame["sig_close_above_ma60"].to_list() == [True, False, False, False, None, None, None]
+
+
+def test_signal_flag_columns_empty_ids():
+    codes = pl.Series("entry_signal_code", [7], dtype=pl.Int64)
+    assert signal_flag_columns(codes, ()).is_empty()
+
+
+def test_default_attribution_features_discovers_sig_columns():
+    frame = pl.DataFrame({
+        "entry_signal_name": ["MA金叉"],
+        "sig_ma_golden_cross": [True],
+        "sig_vol_ratio_ge": [False],
+        "ctx_drawdown_from_high": [-0.1],
+        "ret_5d": [0.02],
+    })
+    features = default_attribution_features(frame)
+    assert features[:3] == (
+        "entry_signal_name", "sig_ma_golden_cross", "sig_vol_ratio_ge",
+    )
+    # 形态特征跟在布尔列之后。
+    assert "ctx_drawdown_from_high" in features
+    # 收益列(未来信息)不得混进默认特征。
+    assert "ret_5d" not in features
+
+
+def test_default_attribution_features_without_sig_falls_back():
+    frame = pl.DataFrame({"entry_signal_name": ["x"], "ctx_ma_bias": [0.0]})
+    features = default_attribution_features(frame)
+    # 无 sig_* 列时退回静态兜底: 组合名 + 全部形态特征。
+    assert features[0] == "entry_signal_name"
+    assert "sig_" not in " ".join(features)
+    assert "ctx_ma_bias" in features
+    assert "ctx_drawdown_from_high" in features
+
+
+def test_beautify_attribution_rows_maps_sig_to_chinese():
+    rows = [
+        {"feature": "sig_ma_golden_cross", "bucket": "true", "ret_n": 40, "ret_mean": 0.05},
+        {"feature": "sig_ma_golden_cross", "bucket": "false", "ret_n": 60, "ret_mean": -0.01},
+        {"feature": "ctx_ma_bias", "bucket": "Rank 1", "ret_n": 30, "ret_mean": 0.02},
+        {"feature": "entry_signal_name", "bucket": "MA金叉", "ret_n": 40, "ret_mean": 0.05},
+    ]
+    out = beautify_attribution_rows(rows)
+    assert out[0]["feature"] == "信号·MA金叉"
+    assert out[0]["bucket"] == "命中"
+    assert out[1]["feature"] == "信号·MA金叉"
+    assert out[1]["bucket"] == "未命中"
+    # 非 sig_ 特征原样透传。
+    assert out[2]["feature"] == "ctx_ma_bias"
+    assert out[2]["bucket"] == "Rank 1"
+    assert out[3]["feature"] == "entry_signal_name"
+    # 数值不受影响。
+    assert out[0]["ret_mean"] == 0.05
+

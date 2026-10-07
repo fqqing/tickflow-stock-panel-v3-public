@@ -40,8 +40,9 @@ from app.plugins.eltdx.provider import market_meta
 from app.signallab.insight import analyze_attribution_stream
 from app.signallab.lab import (
     CONTEXT_FEATURES,
-    DEFAULT_ATTRIBUTION_FEATURES,
     LabRunConfig,
+    beautify_attribution_rows,
+    default_attribution_features,
     list_datasets,
     load_ledger,
     resolve_dataset,
@@ -535,7 +536,7 @@ def get_attribution(
     wanted = (
         [f.strip() for f in features.split(",") if f.strip()]
         if features
-        else list(DEFAULT_ATTRIBUTION_FEATURES)
+        else list(default_attribution_features(frame))
     )
     usable = [f for f in wanted if f in frame.columns]
     if not usable:
@@ -558,7 +559,7 @@ def get_attribution(
         "requested_horizon": horizon,
         "features": usable,
         "skipped_features": [f for f in wanted if f not in frame.columns],
-        "rows": _json_ready(result, round_to=6),
+        "rows": beautify_attribution_rows(_json_ready(result, round_to=6)),
     }
 
 

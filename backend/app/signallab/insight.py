@@ -29,7 +29,7 @@ from typing import Any
 
 import polars as pl
 
-from app.signallab.lab import DEFAULT_ATTRIBUTION_FEATURES
+from app.signallab.lab import beautify_attribution_rows, default_attribution_features
 from app.signallab.outcome import ret_column
 from app.signallab.suggestions import (
     FenceSplitter,
@@ -228,7 +228,7 @@ def collect_attribution_facts(
     min_samples: int = 20,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[int]]:
     """算好要喂给 LLM 的事实: (分桶行, 整体战绩, 持有期列表)。"""
-    wanted = list(features) if features else list(DEFAULT_ATTRIBUTION_FEATURES)
+    wanted = list(features) if features else list(default_attribution_features(frame))
     usable = [f for f in wanted if f in frame.columns]
     result = attribute_outcomes(
         frame,
@@ -258,7 +258,7 @@ def collect_attribution_facts(
             "ret_mean": row.get("ret_mean"),
             "ret_profit_factor": row.get("ret_profit_factor"),
         })
-    return rows, overall, horizons
+    return beautify_attribution_rows(rows), overall, horizons
 
 
 async def analyze_attribution_stream(

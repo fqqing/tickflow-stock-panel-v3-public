@@ -73,7 +73,14 @@ CONTEXT_FEATURES: tuple[str, ...] = (
 )
 
 # 归因默认特征: 信号分支 + 形态。entry_signal_name 是字符串, 按取值分组而非分位。
+# 注意: 这只是「无 sig_* 布尔列可用时的兜底」。真正生效的默认值由
+# :func:`default_attribution_features` 动态拼装 —— 它会把每个信号函数的独立布尔列
+# 插在 entry_signal_name 之后, 让归因能从「组合字符串」细化到「单函数命中/未命中」。
 DEFAULT_ATTRIBUTION_FEATURES: tuple[str, ...] = ("entry_signal_name", *CONTEXT_FEATURES)
+
+# 信号函数独立布尔列的前缀: sig_<函数 id>。与 entry_signal_name(组合字符串) 并列,
+# 用于拆出「单独某信号函数命中 vs 未命中」的胜率差异(lift)。
+SIGNAL_FLAG_PREFIX = "sig_"
 
 
 @dataclass(frozen=True)
@@ -255,6 +262,71 @@ def signal_name_column(entry_signal_code: pl.Series, signal_ids: Sequence[str]) 
     return pl.Series("entry_signal_name", out, dtype=pl.Utf8)
 
 
+def signal_flag_column_names(signal_ids: Sequence[str]) -> tuple[str, ...]:
+    """信号函数独立布尔列的列名序列, 与 :func:`signal_flag_columns` 逐列对应。"""
+    return tuple(f"{SIGNAL_FLAG_PREFIX}{sid}" for sid in signal_ids)
+
+
+def signal_flag_columns(entry_signal_code: pl.Series, signal_ids: Sequence[str]) -> pl.DataFrame:
+    """把位掩码列展开成「每个信号函数一个布尔列」, 供归因做单函数独立胜率。
+
+    ``entry_signal_name`` 把多命中组合成 ``"MA金叉+放量"`` 这样的字符串, 组合类别会爆炸且
+    无法回答「单独 MA金叉 命中 vs 未命中差多少」; 这里展开成 N 个 ``sig_<id>`` 布尔列,
+    True=该事件命中该信号函数, False=未命中(该事件由别的函数触发), 从而得到每个信号函数
+    的独立 lift。
+
+    语义边界: ``entry_signal_code`` 为 null 或 <= 0(该事件没有信号码, 例如保持现状策略的
+    策略级信号列)时整行置 null, 不参与「命中/未命中」对比; 码 > 0 时每一位严格取 0/1。
+    """
+    if not signal_ids:
+        return pl.DataFrame()
+    codes = entry_signal_code.to_list()
+    names = signal_flag_column_names(signal_ids)
+    data: dict[str, list[bool | None]] = {name: [] for name in names}
+    for code in codes:
+        if code is None or int(code) <= 0:
+            for name in names:
+                data[name].append(None)
+            continue
+        mask = int(code)
+        for i, name in enumerate(names):
+            data[name].append(((mask >> i) & 1) == 1)
+    return pl.DataFrame(data)
+
+
+def default_attribution_features(frame: pl.DataFrame) -> tuple[str, ...]:
+    """归因默认特征: 信号组合名 + 每个信号函数独立布尔列 + 形态特征。
+
+    与静态的 :data:`DEFAULT_ATTRIBUTION_FEATURES` 不同, 这里会动态发现台账里实际存在的
+    ``sig_*`` 布尔列(信号函数因策略而异), 插在 ``entry_signal_name`` 之后; 没有布尔列
+    (老策略)时退回静态兜底。
+    """
+    flag_columns = tuple(c for c in frame.columns if c.startswith(SIGNAL_FLAG_PREFIX))
+    return ("entry_signal_name", *flag_columns, *CONTEXT_FEATURES)
+
+
+def beautify_attribution_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把归因行的英文列名/布尔档位映射成中文展示名(只改标签, 不动任何数值)。
+
+    - ``sig_<id>`` 特征名 -> ``信号·<label>``(label 取信号函数注册表里的中文名);
+    - 布尔列 ``true/false`` 档位 -> ``命中/未命中``。
+    其余列(entry_signal_name / ctx_*)原样透传。
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        feature = item.get("feature")
+        if isinstance(feature, str) and feature.startswith(SIGNAL_FLAG_PREFIX):
+            sid = feature[len(SIGNAL_FLAG_PREFIX):]
+            item["feature"] = f"信号·{_signal_label(sid)}"
+            if item.get("bucket") == "true":
+                item["bucket"] = "命中"
+            elif item.get("bucket") == "false":
+                item["bucket"] = "未命中"
+        out.append(item)
+    return out
+
+
 # ===== 复盘运行 =====
 
 
@@ -378,6 +450,9 @@ def run_lab(
             frame = frame.with_columns(
                 signal_name_column(frame["entry_signal_code"], signal_ids)
             )
+            flags = signal_flag_columns(frame["entry_signal_code"], signal_ids)
+            if flags.height == frame.height:
+                frame = frame.hstack(flags)
 
         if config.write and data_dir is not None and not frame.is_empty():
             progress("write", 95, "落盘")
