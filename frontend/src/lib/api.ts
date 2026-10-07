@@ -1808,6 +1808,33 @@ export interface StrategyAlertEvent {
   [key: string]: unknown
 }
 
+// ===== 信号函数目录 (czsc 信号统一层) =====
+/** 信号函数参数定义（与后端 registry 的 params 同构）。 */
+export interface SignalFunctionParam {
+  id: string
+  label?: string
+  type?: string
+  default?: unknown
+  min?: number
+  max?: number
+  step?: number
+  options?: string[]
+  [key: string]: unknown
+}
+
+/** 一个可复用的原子信号函数（/api/strategies/signals 返回项）。 */
+export interface SignalFunctionDef {
+  name: string
+  category: string
+  direction: 'entry' | 'exit' | 'both'
+  description: string
+  label: string
+  required_fields: string[]
+  warmup: number
+  params: SignalFunctionParam[]
+  enable_param?: string | null
+}
+
 // ===== API surface =====
 // ===== Signal Lab (信号实验室) =====
 export interface SignalLabStrategy {
@@ -3479,6 +3506,10 @@ export const api = {
 
   strategyReload: () =>
     request<{ ok: boolean; count: number }>('/api/strategies/reload', { method: 'POST' }),
+
+  /** 信号函数目录 — 信号统一层（借鉴 czsc）的可复用原子信号清单 */
+  strategySignals: () =>
+    request<{ signals: SignalFunctionDef[] }>('/api/strategies/signals'),
 
   // ===== Custom Signals (自定义信号) =====
   customSignalsList: () =>

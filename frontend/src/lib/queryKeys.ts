@@ -101,6 +101,8 @@ export const QK = {
                            ['chan-scan', kinds, recentBars, strict] as const,
   // 信号实验室：复盘任务与台账查询共用一个前缀，复盘完成后整体失效即可
   signalLab:            ['signal-lab'] as const,
+  // 信号函数目录（czsc 信号统一层）：可复用原子信号清单，静态度量
+  signalCatalog:        ['signal-catalog'] as const,
   // 盘中脉搏：资金流/竞价/力道/题材/梯队/逐笔共用前缀
   pulse:                ['pulse'] as const,
   klineMinute:          (symbol: string, date: string) =>

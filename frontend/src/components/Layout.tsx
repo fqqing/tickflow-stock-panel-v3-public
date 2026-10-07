@@ -55,6 +55,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   GitBranch,
+  Library,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -97,6 +98,7 @@ const nav = [
   { to: '/regime', label: '市场环境', icon: Gauge },
   { to: '/abnormal', label: '异动监控', icon: Siren },
   { to: '/signal-lab', label: '信号实验室', icon: FlaskConical },
+  { to: '/signal-catalog', label: '信号函数库', icon: Library },
   { to: '/pulse', label: '盘中脉搏', icon: Activity },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
