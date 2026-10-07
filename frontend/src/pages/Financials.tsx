@@ -131,6 +131,8 @@ export function Financials() {
   const tables = status?.tables ?? {}
   const available = status?.available ?? false
   const lastSync = status?.last_sync ?? {}
+  // 能否真正同步: 本地数据兜底模式下(无套餐/无 custom 源)只放行查询,同步按钮禁用。
+  const canSync = status?.can_sync ?? false
   // 本次同步进度: 仅当 syncStartedAt 存在且 syncing 时, 按 last_sync 时间戳判断
   const isFullSync = syncing && syncStartedAt && !syncSingleTable  // 全量同步
   const isSingleSync = syncing && syncStartedAt && !!syncSingleTable  // 单表同步
@@ -176,8 +178,8 @@ export function Financials() {
             <button
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => handleSync('all')}
-              disabled={syncing}
-              title={syncing ? '正在同步，请稍候…' : '同步全部财务表'}
+              disabled={syncing || !canSync}
+              title={syncing ? '正在同步，请稍候…' : canSync ? '同步全部财务表' : '本地数据模式：同步需升级 API Key 或配置 tushare'}
             >
               {syncing
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -238,8 +240,8 @@ export function Financials() {
                       <button
                         className="text-muted hover:text-accent transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                         onClick={() => handleSync(key)}
-                        disabled={syncing}
-                        title={syncing ? '正在同步…' : `更新${label}`}
+                        disabled={syncing || !canSync}
+                        title={syncing ? '正在同步…' : canSync ? `更新${label}` : '本地数据模式：同步需升级 API Key 或配置 tushare'}
                       >
                         {syncing
                           ? <Loader2 className="h-3.5 w-3.5 animate-spin" />

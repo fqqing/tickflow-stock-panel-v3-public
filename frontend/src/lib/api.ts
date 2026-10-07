@@ -63,6 +63,8 @@ export interface FinancialStatus {
   last_sync: Record<string, string>
   /** 服务端是否正在同步(手动触发)——驱动"同步中"UI 并防重复点击 */
   syncing?: boolean
+  /** 是否具备真正同步能力(套餐/custom源)。本地数据兜底只放行查询,不能同步 */
+  can_sync?: boolean
 }
 
 export interface FinancialMetricRecord {
