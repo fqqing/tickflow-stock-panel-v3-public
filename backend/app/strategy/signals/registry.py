@@ -130,5 +130,6 @@ def signal_catalog() -> list[dict[str, Any]]:
             "required_fields": sorted(s.required_fields),
             "warmup": s.warmup,
             "params": [dict(p) for p in s.params],
+            "enable_param": s.enable_param,
         })
     return out
