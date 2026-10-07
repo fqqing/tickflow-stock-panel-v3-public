@@ -236,14 +236,15 @@ def test_strategy_rule_reload_preserves_state_and_semantic_edit_resets_it():
 
 
 def test_matrix_signal_hits_map_codes_and_keep_unlabelled_hits():
+    # 位掩码语义: bit i 对应 signal_ids[i]; code<=0 表示无信号码(仍保留空列表)。
     mapped = StrategyEngine._matrix_signal_hits(
         np.array([1, 1, 0], dtype=np.uint8),
-        np.array([1, -1, -1], dtype=np.int16),
+        np.array([3, -1, -1], dtype=np.int64),  # A 命中 bit0+bit1, B 无标签
         ("signal_a", "signal_b"),
         ("A", "B", "C"),
     )
     assert mapped == [
-        {"symbol": "A", "signals": ["signal_b"]},
+        {"symbol": "A", "signals": ["signal_a", "signal_b"]},
         {"symbol": "B", "signals": []},
     ]
 
@@ -273,7 +274,8 @@ def test_matrix_strategy_pool_masks_rows_and_both_signal_directions():
             nonlocal calls
             calls += 1
             active = np.ones(market.shape, dtype=np.uint8)
-            codes = np.zeros(market.shape, dtype=np.int16)
+            # bit0 置位 = 命中 entry_signal_ids/exit_signal_ids 的第一个信号。
+            codes = np.ones(market.shape, dtype=np.int64)
             return make_signal_matrix(
                 market.shape,
                 entry=active,

@@ -539,7 +539,7 @@ def test_merge_entry_signal_code_records_source():
         shape, [sig_a, sig_b], [("child_a", 1.0), ("child_b", 1.0)], "union", 0, max_hold=1
     )
 
-    # asset 0 来自 child A (code=0), asset 1 来自 child B (code=1)
-    assert merged.entry_signal_code[0, 0] == 0
-    assert merged.entry_signal_code[0, 1] == 1
+    # asset 0 来自 child A (bit0 = 1), asset 1 来自 child B (bit1 = 2)
+    assert merged.entry_signal_code[0, 0] == 1
+    assert merged.entry_signal_code[0, 1] == 2
     assert merged.entry_signal_ids == ("composite:child_a", "composite:child_b")

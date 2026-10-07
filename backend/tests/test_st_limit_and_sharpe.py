@@ -16,7 +16,7 @@ import pytest
 from app.backtest.factor import FactorBacktestService
 from app.backtest.matrix import build_market_data_matrix
 from app.indicators.pipeline import compute_limit_signals
-from app.strategy.builtin.near_limit_up import MATRIX_STRATEGY
+from app.strategy.signals.backend import SignalComboStrategy
 
 
 def test_near_limit_pct_st_only_on_main_board():
@@ -122,7 +122,9 @@ def test_near_limit_up_accepts_stocks_inside_configured_gap():
         "volume": [1000.0] * len(dates),
     })
     market = build_market_data_matrix(panel, field_columns={"price_limit_pct"})
-    signals = MATRIX_STRATEGY.compute_signals(market, {
+    # near_limit_up 已迁移为 signal_combo 声明式（all_of(change_pct_ge, near_limit_up_gap)）。
+    combo = SignalComboStrategy("all_of(change_pct_ge, near_limit_up_gap)", "ma20_breakdown")
+    signals = combo.compute_signals(market, {
         "min_change": 7.0,
         "limit_gap": 3.0,
     })

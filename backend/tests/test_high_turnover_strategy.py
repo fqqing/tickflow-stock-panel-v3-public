@@ -5,7 +5,7 @@ from datetime import date
 import polars as pl
 
 from app.backtest.matrix import build_market_data_matrix
-from app.strategy.builtin import high_turnover_surge
+from app.strategy.signals.backend import SignalComboStrategy
 
 
 def test_high_turnover_surge_uses_percent_value_turnover_rate():
@@ -20,7 +20,9 @@ def test_high_turnover_surge_uses_percent_value_turnover_rate():
         "turnover_rate": [4.9, 5.1, 4.9, 5.1],
     })
     market = build_market_data_matrix(panel, field_columns={"turnover_rate"})
-    signals = high_turnover_surge.MATRIX_STRATEGY.compute_signals(
+    # high_turnover_surge 已迁移为 signal_combo 声明式（all_of(turnover_ge, change_pct_ge)）。
+    combo = SignalComboStrategy("all_of(turnover_ge, change_pct_ge)", "ma20_breakdown")
+    signals = combo.compute_signals(
         market,
         {"min_turnover": 5.0, "min_change": 3.0},
     )
