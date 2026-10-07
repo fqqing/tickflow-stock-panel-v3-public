@@ -1,16 +1,5 @@
-"""超跌反弹 — RSI14 < 30 + 涨幅 > 1% + 站上 MA5, 超卖反弹信号"""
-
-import numpy as np
-
-from app.backtest.matrix import (
-    MarketDataMatrix,
-    SignalMatrix,
-    make_signal_matrix,
-    matrix_feature,
-)
-from app.backtest.matrix import (
-    valid_shift as shift,
-)
+"""超跌反转 — RSI14 < 30 + 涨幅 > 1% + 站上 MA5（信号组合声明式）"""
+from __future__ import annotations
 
 META = {
     "id": "oversold_reversal",
@@ -53,41 +42,11 @@ META = {
     "limit": 50,
 }
 
-EXECUTION_BACKEND = "matrix_native"
+EXECUTION_BACKEND = "signal_combo"
+ENTRY_SIGNAL_EXPR = "all_of(rsi_below, change_pct_ge, close_above_ma5)"
+EXIT_SIGNAL_EXPR = "ma20_breakdown"
 ENTRY_SIGNALS = []
 EXIT_SIGNALS = ["signal_ma20_breakdown"]
 STOP_LOSS = -0.05
 MAX_HOLD_DAYS = 15
-
-
-class OversoldReversalMatrixStrategy:
-    def required_fields(self) -> frozenset[str]:
-        return frozenset({"close"})
-
-    def required_warmup_bars(self, params: dict) -> int:
-        del params
-        return 60
-
-    def compute_signals(self, market: MarketDataMatrix, params: dict) -> SignalMatrix:
-        entry = np.ones(market.shape, dtype=bool)
-        if params.get("use_rsi_filter", True):
-            entry &= matrix_feature(market, "rsi_14") < float(params.get("rsi_max", 30.0))
-        if params.get("use_change_filter", True):
-            entry &= (
-                matrix_feature(market, "change_pct") > float(params.get("min_change", 1.0)) / 100.0
-            )
-        if params.get("require_above_ma5", True):
-            entry &= market.close > matrix_feature(market, "ma5")
-        ma20 = matrix_feature(market, "ma20")
-        exit_ = (market.close < ma20) & (shift(market.close, 1) >= shift(ma20, 1))
-        return make_signal_matrix(
-            market.shape,
-            entry=entry.astype(np.uint8),
-            exit=exit_.astype(np.uint8),
-            entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
-            exit_signal_code=np.where(exit_, 0, -1).astype(np.int16),
-            exit_signal_ids=("signal_ma20_breakdown",),
-        )
-
-
-MATRIX_STRATEGY = OversoldReversalMatrixStrategy()
+LOOKBACK_DAYS = 60

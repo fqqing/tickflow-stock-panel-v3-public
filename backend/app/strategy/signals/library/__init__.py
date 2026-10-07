@@ -7,6 +7,13 @@
 """
 from __future__ import annotations
 
-from app.strategy.signals.library import ma, macd, volume, boll  # noqa: F401 (注册副作用)
+from app.strategy.signals.library import (  # noqa: F401 (注册副作用)
+    ma,
+    macd,
+    volume,
+    boll,
+    price,
+    limit_up,
+)
 
-__all__ = ["ma", "macd", "volume", "boll"]
+__all__ = ["ma", "macd", "volume", "boll", "price", "limit_up"]

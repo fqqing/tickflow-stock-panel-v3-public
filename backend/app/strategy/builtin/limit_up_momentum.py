@@ -1,8 +1,5 @@
-"""连板接力 — 近2日涨停且今日涨幅 > 5%, 连板股追踪"""
-
-import numpy as np
-
-from app.backtest.matrix import MarketDataMatrix, SignalMatrix, make_signal_matrix, matrix_feature
+"""连板接力 — 今日涨幅 > 5% 且连板（信号组合声明式）"""
+from __future__ import annotations
 
 META = {
     "id": "limit_up_momentum",
@@ -39,37 +36,11 @@ META = {
     "limit": 50,
 }
 
-EXECUTION_BACKEND = "matrix_native"
+EXECUTION_BACKEND = "signal_combo"
+ENTRY_SIGNAL_EXPR = "all_of(change_pct_ge, consecutive_limit_ups_ge)"
+EXIT_SIGNAL_EXPR = ""
 ENTRY_SIGNALS = ["signal_limit_up"]
 EXIT_SIGNALS = []
 STOP_LOSS = -0.05
 MAX_HOLD_DAYS = 5
-
-
-class LimitUpMomentumMatrixStrategy:
-    def required_fields(self) -> frozenset[str]:
-        return frozenset({"close", "consecutive_limit_ups"})
-
-    def required_warmup_bars(self, params: dict) -> int:
-        del params
-        return 60
-
-    def compute_signals(self, market: MarketDataMatrix, params: dict) -> SignalMatrix:
-        entry = np.ones(market.shape, dtype=bool)
-        if params.get("use_change_filter", True):
-            entry &= (
-                matrix_feature(market, "change_pct") > float(params.get("min_change", 5.0)) / 100.0
-            )
-        if params.get("use_boards_filter", True):
-            entry &= matrix_feature(market, "consecutive_limit_ups") >= int(
-                params.get("min_boards", 1)
-            )
-        return make_signal_matrix(
-            market.shape,
-            entry=entry.astype(np.uint8),
-            entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
-            entry_signal_ids=("signal_limit_up",),
-        )
-
-
-MATRIX_STRATEGY = LimitUpMomentumMatrixStrategy()
+LOOKBACK_DAYS = 60

@@ -4,8 +4,8 @@
 即可，加载期由 :class:`SignalComboStrategy` 编译成实现 :class:`MatrixStrategy` 协议的
 实例，交由 engine 归一化为 ``matrix_native`` 后端 —— 回测 / SignalLab / 实时零改动接入。
 
-单事件约束（首版）：一个信号组合策略只有一个 entry 事件和一个 exit 事件，因此
-``entry_signal_ids`` / ``exit_signal_ids`` 各至多一个元素。多事件拆解归因留待后续。
+信号码（首版）：entry/exit 各用一个组合事件，信号码恒为 0（对应 signal_ids 的
+第一个元素）。策略声明多个 signal_ids 仅作标签保留，逐信号位掩码归因留待后续。
 """
 from __future__ import annotations
 
@@ -42,11 +42,6 @@ class SignalComboStrategy:
         self.exit_expr = (exit_expr or "").strip()
         self.entry_signal_ids = tuple(entry_signal_ids)
         self.exit_signal_ids = tuple(exit_signal_ids)
-
-        if self.entry_expr and len(self.entry_signal_ids) > 1:
-            raise ValueError("signal_combo 首版单个 entry 事件至多一个信号名")
-        if self.exit_expr and len(self.exit_signal_ids) > 1:
-            raise ValueError("signal_combo 首版单个 exit 事件至多一个信号名")
 
         self._entry_signals = resolve_expr_signals(self.entry_expr)
         self._exit_signals = resolve_expr_signals(self.exit_expr)

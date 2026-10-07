@@ -1,16 +1,5 @@
-"""逼近涨停 — 涨幅 > 7% 且距涨停 < 3%, 盘后选股"""
-
-import numpy as np
-
-from app.backtest.matrix import (
-    MarketDataMatrix,
-    SignalMatrix,
-    make_signal_matrix,
-    matrix_feature,
-)
-from app.backtest.matrix import (
-    valid_shift as shift,
-)
+"""逼近涨停 — 涨幅 > 7% 且距涨停 < 3%（信号组合声明式）"""
+from __future__ import annotations
 
 META = {
     "id": "near_limit_up",
@@ -52,42 +41,11 @@ META = {
     "limit": 50,
 }
 
-EXECUTION_BACKEND = "matrix_native"
+EXECUTION_BACKEND = "signal_combo"
+ENTRY_SIGNAL_EXPR = "all_of(change_pct_ge, near_limit_up_gap)"
+EXIT_SIGNAL_EXPR = "ma20_breakdown"
 ENTRY_SIGNALS = []
 EXIT_SIGNALS = ["signal_ma20_breakdown"]
 STOP_LOSS = -0.05
 MAX_HOLD_DAYS = 5
-
-
-class NearLimitUpMatrixStrategy:
-    def required_fields(self) -> frozenset[str]:
-        return frozenset({"close", "price_limit_pct"})
-
-    def required_warmup_bars(self, params: dict) -> int:
-        del params
-        return 60
-
-    def compute_signals(self, market: MarketDataMatrix, params: dict) -> SignalMatrix:
-        change = matrix_feature(market, "change_pct")
-        entry = np.ones(market.shape, dtype=bool)
-        if params.get("use_change_filter", True):
-            entry &= change > float(params.get("min_change", 7.0)) / 100.0
-        if params.get("use_limit_gap_filter", True):
-            limit_pct = matrix_feature(market, "price_limit_pct")
-            entry &= (
-                change
-                >= limit_pct - float(params.get("limit_gap", 3.0)) / 100.0
-            )
-        ma20 = matrix_feature(market, "ma20")
-        exit_ = (market.close < ma20) & (shift(market.close, 1) >= shift(ma20, 1))
-        return make_signal_matrix(
-            market.shape,
-            entry=entry.astype(np.uint8),
-            exit=exit_.astype(np.uint8),
-            entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
-            exit_signal_code=np.where(exit_, 0, -1).astype(np.int16),
-            exit_signal_ids=("signal_ma20_breakdown",),
-        )
-
-
-MATRIX_STRATEGY = NearLimitUpMatrixStrategy()
+LOOKBACK_DAYS = 60
