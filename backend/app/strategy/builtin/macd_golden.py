@@ -1,19 +1,8 @@
-"""MACD金叉放量 — MACD金叉当日 + 量能放大"""
+"""MACD金叉放量 — MACD金叉当日 + 量能放大（信号组合声明式）
 
-import numpy as np
-
-from app.backtest.matrix import (
-    MarketDataMatrix,
-    SignalMatrix,
-    make_signal_matrix,
-    matrix_feature,
-)
-from app.backtest.matrix import (
-    valid_ewm_adjust_false as ewm_adjust_false,
-)
-from app.backtest.matrix import (
-    valid_shift as shift,
-)
+信号函数统一层样板迁移：入场条件 ``all_of(macd_golden, vol_ratio_ge)`` 声明式组合，
+布尔开关 require_macd_golden / use_volume_filter 通过 enable_param 机制保留。
+"""
 
 META = {
     "id": "macd_golden",
@@ -41,59 +30,11 @@ META = {
     "limit": 100,
 }
 
+EXECUTION_BACKEND = "signal_combo"
+ENTRY_SIGNAL_EXPR = "all_of(macd_golden, vol_ratio_ge)"
+EXIT_SIGNAL_EXPR = "macd_dead"
 ENTRY_SIGNALS = ["signal_macd_golden"]
 EXIT_SIGNALS = ["signal_macd_dead"]
-EXECUTION_BACKEND = "matrix_native"
 STOP_LOSS = -0.07
 MAX_HOLD_DAYS = 20
-
-
-class MACDGoldenMatrixStrategy:
-    def required_fields(self) -> frozenset[str]:
-        return frozenset({"close", "volume"})
-
-    def required_warmup_bars(self, params: dict) -> int:
-        del params
-        return 60
-
-    def compute_signals(
-        self,
-        market: MarketDataMatrix,
-        params: dict,
-    ) -> SignalMatrix:
-        valid = np.isfinite(market.close)
-        ema12 = ewm_adjust_false(market.close, valid, span=12)
-        ema26 = ewm_adjust_false(market.close, valid, span=26)
-        dif = ema12 - ema26
-        dif_valid = np.isfinite(dif)
-        dea = ewm_adjust_false(dif, dif_valid, span=9)
-        previous_dif = shift(dif, 1, dif_valid)
-        previous_dea = shift(dea, 1, np.isfinite(dea))
-        golden = (dif > dea) & (previous_dif <= previous_dea)
-        dead = (dif < dea) & (previous_dif >= previous_dea)
-
-        entry = (
-            golden
-            if params.get("require_macd_golden", True)
-            else np.ones(
-                market.shape,
-                dtype=bool,
-            )
-        )
-        if params.get("use_volume_filter", True):
-            entry &= matrix_feature(market, "vol_ratio_5d") >= float(
-                params.get("vol_ratio_min", 1.5)
-            )
-
-        return make_signal_matrix(
-            market.shape,
-            entry=entry.astype(np.uint8),
-            exit=dead.astype(np.uint8),
-            entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
-            exit_signal_code=np.where(dead, 0, -1).astype(np.int16),
-            entry_signal_ids=("signal_macd_golden",),
-            exit_signal_ids=("signal_macd_dead",),
-        )
-
-
-MATRIX_STRATEGY = MACDGoldenMatrixStrategy()
+LOOKBACK_DAYS = 60

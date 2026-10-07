@@ -1,8 +1,8 @@
-"""布林突破 — 突破布林上轨 + 放量"""
+"""布林突破 — 突破布林上轨 + 放量（信号组合声明式）
 
-import numpy as np
-
-from app.backtest.matrix import MarketDataMatrix, SignalMatrix, make_signal_matrix, matrix_feature
+信号函数统一层样板迁移：入场条件 ``all_of(boll_breakout_upper, vol_ratio_ge)``
+声明式组合，布尔开关 require_boll_breakout / use_volume_filter 通过 enable_param 保留。
+"""
 
 META = {
     "id": "boll_breakout",
@@ -35,41 +35,11 @@ META = {
     "limit": 100,
 }
 
-EXECUTION_BACKEND = "matrix_native"
+EXECUTION_BACKEND = "signal_combo"
+ENTRY_SIGNAL_EXPR = "all_of(boll_breakout_upper, vol_ratio_ge)"
+EXIT_SIGNAL_EXPR = "boll_breakdown_lower"
 ENTRY_SIGNALS = ["signal_boll_breakout_upper"]
 EXIT_SIGNALS = ["signal_boll_breakdown_lower"]
 STOP_LOSS = -0.06
 MAX_HOLD_DAYS = 15
-
-
-class BollBreakoutMatrixStrategy:
-    def required_fields(self) -> frozenset[str]:
-        return frozenset({"close", "volume"})
-
-    def required_warmup_bars(self, params: dict) -> int:
-        del params
-        return 60
-
-    def compute_signals(self, market: MarketDataMatrix, params: dict) -> SignalMatrix:
-        upper = matrix_feature(market, "boll_upper")
-        lower = matrix_feature(market, "boll_lower")
-        entry = np.ones(market.shape, dtype=bool)
-        if params.get("require_boll_breakout", True):
-            entry &= market.close > upper
-        if params.get("use_volume_filter", True):
-            entry &= matrix_feature(market, "vol_ratio_5d") >= float(
-                params.get("vol_ratio_min", 1.5)
-            )
-        exit_ = market.close < lower
-        return make_signal_matrix(
-            market.shape,
-            entry=entry.astype(np.uint8),
-            exit=exit_.astype(np.uint8),
-            entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
-            exit_signal_code=np.where(exit_, 0, -1).astype(np.int16),
-            entry_signal_ids=("signal_boll_breakout_upper",),
-            exit_signal_ids=("signal_boll_breakdown_lower",),
-        )
-
-
-MATRIX_STRATEGY = BollBreakoutMatrixStrategy()
+LOOKBACK_DAYS = 60

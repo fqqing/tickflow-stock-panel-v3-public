@@ -327,6 +327,18 @@ def list_strategies(
     return {"strategies": result, "load_errors": engine.load_errors()}
 
 
+@router.get("/signals")
+def list_signal_functions():
+    """信号函数目录 — 信号函数统一层（借鉴 czsc）的可复用原子信号清单。
+
+    返回每个信号函数的 name/category/direction/description/required_fields/warmup/params，
+    供前端展示「可用信号函数」并在组合表达式里引用。
+    """
+    from app.strategy.signals import signal_catalog
+
+    return {"signals": signal_catalog()}
+
+
 @router.get("/{strategy_id}")
 def get_strategy(strategy_id: str, request: Request):
     engine = _get_engine(request)

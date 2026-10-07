@@ -37,6 +37,7 @@ from app.indicators.pipeline import (
     compute_signals as compute_indicator_signals,
 )
 from app.strategy.engine import StrategyDataContext, StrategyEngine
+from app.strategy.signals.backend import SignalComboStrategy
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -337,7 +338,12 @@ def test_builtin_matrix_strategies_use_their_declared_formula_modules():
         strategy = StrategyEngine._load_file(strategy_path)
         assert strategy.execution_backend == "matrix_native"
         assert strategy.matrix_strategy is not None
-        assert strategy.matrix_strategy.__class__.__module__ == strategy_path.stem
+        # signal_combo 声明式策略由共享的 SignalComboStrategy 承载（非策略文件内定义），
+        # 其余 matrix_native 策略的 matrix_strategy 类必须定义在策略自己的模块里。
+        if isinstance(strategy.matrix_strategy, SignalComboStrategy):
+            pass
+        else:
+            assert strategy.matrix_strategy.__class__.__module__ == strategy_path.stem
         assert strategy.filter_fn is None
         assert strategy.filter_history_fn is None
 

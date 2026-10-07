@@ -481,7 +481,7 @@ class StrategyEngine:
                 ),
             )
         )
-        valid_backends = {"polars_expr", "matrix_native", "python_history_legacy", "composite"}
+        valid_backends = {"polars_expr", "matrix_native", "python_history_legacy", "composite", "signal_combo"}
         if execution_backend not in valid_backends:
             raise ValueError(
                 f"unsupported execution backend {execution_backend!r}; "
@@ -490,6 +490,19 @@ class StrategyEngine:
 
         matrix_strategy = getattr(mod, "MATRIX_STRATEGY", None)
         composite_spec: CompositeSpec | None = None
+        if execution_backend == "signal_combo":
+            # 声明式信号组合：把 ENTRY/EXIT_SIGNAL_EXPR 编译成矩阵策略，
+            # 归一化为 matrix_native 后端，复用回测 / SignalLab / 实时全链路。
+            from app.strategy.signals.backend import SignalComboStrategy
+
+            matrix_strategy = SignalComboStrategy(
+                getattr(mod, "ENTRY_SIGNAL_EXPR", None),
+                getattr(mod, "EXIT_SIGNAL_EXPR", None),
+                entry_signal_ids=tuple(getattr(mod, "ENTRY_SIGNALS", []) or []),
+                exit_signal_ids=tuple(getattr(mod, "EXIT_SIGNALS", []) or []),
+                warmup_override=getattr(mod, "LOOKBACK_DAYS", None),
+            )
+            execution_backend = "matrix_native"
         if execution_backend == "matrix_native":
             from app.backtest.matrix import MatrixStrategy
 
