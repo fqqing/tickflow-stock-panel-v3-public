@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import * as kc from 'klinecharts'
-import { api, KLINE_CHART_FIELDS, LIMIT_UP_FIELDS, klineChartFields, type KlineRow } from '@/lib/api'
+import { api, KLINE_CHART_FIELDS, klineChartFields, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useChanOverlay } from '@/lib/useChanOverlay'
 import { useChartTheme } from '@/lib/theme'
@@ -492,7 +492,7 @@ export function KLinePro({
     // signalsOn 必须进 key: 打开信号标记要重新拉一次带 signal_* 列的响应,
     // 否则命中旧缓存(没有信号列)会导致图上什么都不标。
     queryKey: [...QK.kline(symbol, dateRange.start, dateRange.end, extColumns, period, adjust), signalsOn],
-    queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns, CUSTOM_INDICATORS, `${klineChartFields(signalsOn)},${LIMIT_UP_FIELDS}`, period, adjust),
+    queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns, CUSTOM_INDICATORS, klineChartFields(signalsOn), period, adjust),
     enabled: !!symbol && !minutePeriod,
   })
 

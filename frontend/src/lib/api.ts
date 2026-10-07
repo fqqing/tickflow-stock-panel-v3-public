@@ -288,9 +288,21 @@ export const KLINE_CHART_FIELDS = [
  */
 export const KLINE_SIGNAL_FIELDS = BUILTIN_SIGNAL_DEFINITIONS.map((d) => d.id).join(',')
 
-/** K 线图请求的 fields: 打开信号标记时追加信号列 */
+/**
+ * K 线图请求的 fields: 打开信号标记时追加信号列; 涨停/连板/炸板三列始终带上
+ * (见 LIMIT_UP_FIELDS 注释 —— 它是 K 线固有语义, 不被信号开关绑架)。
+ *
+ * ★ 去重保序: 信号列清单(BUILTIN_SIGNAL_DEFINITIONS)里本就含 signal_limit_up /
+ *   signal_broken_limit_up, 直接拼接会重复 —— 后端 polars select 遇到重复输出名
+ *   直接 DuplicateError 500(实测「信号」开关一开图就 500 的根因)。
+ */
 export function klineChartFields(withSignals: boolean): string {
-  return withSignals ? `${KLINE_CHART_FIELDS},${KLINE_SIGNAL_FIELDS}` : KLINE_CHART_FIELDS
+  const parts = [
+    ...KLINE_CHART_FIELDS.split(','),
+    ...(withSignals ? KLINE_SIGNAL_FIELDS.split(',') : []),
+    ...LIMIT_UP_FIELDS.split(','),
+  ].map(s => s.trim()).filter(Boolean)
+  return [...new Set(parts)].join(',')
 }
 
 /**

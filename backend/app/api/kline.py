@@ -932,6 +932,9 @@ def _select_fields_df(df, fields: str | None):
         return df
     keep = [c.strip() for c in fields.split(",") if c.strip()]
     keep = [c for c in keep if c in df.columns]
+    # 去重保序: polars select 不允许重复输出名(实测 signal_limit_up 重复时直接
+    # DuplicateError 500)。调用方(前端信号开关 + 涨停标记字段拼接)可能交来重叠列。
+    keep = list(dict.fromkeys(keep))
     return df.select(keep) if keep else df
 
 
