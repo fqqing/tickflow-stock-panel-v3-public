@@ -251,6 +251,35 @@ export interface AnnItem {
   columns: string[]
 }
 
+/** 资讯: 电报条目里关联的 A 股标的 */
+export interface FlashStock {
+  symbol: string
+  code: string
+}
+
+/** 资讯: 电报条目 (东财全市场快讯, 财联社电报同类) */
+export interface FlashItem {
+  id: string
+  title: string
+  summary: string
+  showTime: string
+  /** titleColor, 非 0 为重要快讯(前端标红) */
+  important: number
+  stocks: FlashStock[]
+  boards: string[]
+  share: number
+  url: string
+}
+
+/** 资讯: 电报流响应 */
+export interface FlashResp {
+  items: FlashItem[]
+  sortEnd: string
+  total: number
+  column: number
+  columnName: string
+}
+
 /**
  * K 线图绘图所需的列白名单 (传给 /api/kline/daily 的 fields 参数)。
  *
@@ -2446,6 +2475,12 @@ export const api = {
   newsAnnContent: (artCode: string) =>
     request<{ art_code: string; content: string }>(
       `/api/news/ann-content?art_code=${encodeURIComponent(artCode)}`,
+    ),
+  /** 资讯: 全市场快讯电报流 (东财 getFastNewsList, 后端 30s 缓存) */
+  newsFlash: (size = 50, sortEnd = '', column = 102) =>
+    request<FlashResp>(
+      `/api/news/flash?size=${size}&column=${column}`
+      + (sortEnd ? `&sort_end=${encodeURIComponent(sortEnd)}` : ''),
     ),
 
   /** 五档盘口 */

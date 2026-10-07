@@ -31,9 +31,14 @@ router = APIRouter(prefix="/api/news", tags=["news"])
 _NEWS_URL = "https://search-api-web.eastmoney.com/search/jsonp"
 _ANN_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 _ANN_CONTENT_URL = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
+_FLASH_URL = "https://np-listapi.eastmoney.com/comm/web/getFastNewsList"
 _TIMEOUT = 15.0
 _CACHE_TTL = 300.0
 _CACHE_MAX = 500
+
+# 快讯(电报)要实时, 用独立短缓存(30s), 与上面 5 分钟的个股新闻缓存分开。
+_FLASH_TTL = 30.0
+_flash_cache: dict[str, tuple[float, Any]] = {}
 
 # 搜索命中的高亮标签, 展示前剥掉
 _EM_RE = re.compile(r"</?em>")
@@ -181,4 +186,101 @@ def get_announcement_content(art_code: str = Query(..., description="公告 art_
     content = (data.get("data") or {}).get("notice_content") or ""
     resp = {"art_code": art_code, "content": content}
     _cache_put(key, resp)
+    return resp
+
+
+# 快讯(电报)栏目 fastColumn -> 栏目名。102=全部/全球 7x24 是主频道, 24h 滚动更新。
+# 其余栏目低频(周末/夜间可能长时间无新条目), 供前端下拉切换, 默认全部。
+_FLASH_COLUMNS = {
+    101: "要闻",
+    102: "全部",
+    104: "公司",
+    105: "市场",
+    106: "机构",
+    107: "宏观",
+    108: "债券",
+    109: "基金",
+    110: "大宗",
+}
+
+
+def _secid_to_symbol(secid: str) -> str | None:
+    """东财 secid -> 本项目 symbol。0.300401 -> 300401.SZ; 1.600519 -> 600519.SH。
+
+    其他市场前缀(90/1007 板块, 105/106/116/150/177/999 基金债券等)不是 A 股个股,
+    返回 None。
+    """
+    prefix, _, code = secid.partition(".")
+    if prefix == "0" and code:
+        return f"{code}.SZ"
+    if prefix == "1" and code:
+        return f"{code}.SH"
+    return None
+
+
+def _is_board_secid(secid: str) -> bool:
+    return secid.startswith(("90.", "1007."))
+
+
+@router.get("/flash")
+def get_flash_news(
+    size: int = Query(50, ge=1, le=200),
+    column: int = Query(102, ge=100, le=200),
+    sort_end: str = Query("", description="上一页返回的 sortEnd, 用于翻页"),
+):
+    """全市场快讯电报流 (东财 getFastNewsList)。
+
+    与财联社电报同类: 一句话快讯, 按时间倒序, titleColor!=0 为重要快讯(前端标红)。
+    summary 即完整电报正文(含【标题】前缀), 无需二次抓取。
+    stockList 里的 0/1 前缀映射成 A 股 symbol, 供前端跳个股详情。
+    """
+    key = f"flash:{column}:{size}:{sort_end}"
+    hit = _flash_cache.get(key)
+    if hit and time.time() - hit[0] < _FLASH_TTL:
+        return hit[1]
+
+    params = {
+        "client": "web",
+        "biz": "web_724",
+        "fastColumn": str(column),
+        "sortEnd": sort_end,
+        "pageSize": str(size),
+        "req_trace": str(int(time.time() * 1000)),
+    }
+    data = _get_json(_FLASH_URL, params)
+    d = data.get("data") or {}
+    raw = d.get("fastNewsList") or []
+    items = []
+    for r in raw:
+        stocks = []
+        boards = []
+        for s in (r.get("stockList") or []):
+            sym = _secid_to_symbol(s)
+            if sym:
+                stocks.append({"symbol": sym, "code": sym.split(".")[0]})
+            elif _is_board_secid(s):
+                boards.append(s.split(".")[-1])
+        code = r.get("code") or ""
+        items.append({
+            "id": code,
+            "title": _clean(r.get("title")),
+            "summary": _clean(r.get("summary")),
+            "showTime": r.get("showTime") or "",
+            "important": r.get("titleColor") or 0,
+            "stocks": stocks,
+            "boards": boards,
+            "share": r.get("share") or 0,
+            "url": f"https://finance.eastmoney.com/a/{code}.html" if code else "",
+        })
+    resp = {
+        "items": items,
+        "sortEnd": d.get("sortEnd") or "",
+        "total": d.get("total") or 0,
+        "column": column,
+        "columnName": _FLASH_COLUMNS.get(column, str(column)),
+    }
+    _flash_cache[key] = (time.time(), resp)
+    if len(_flash_cache) > _CACHE_MAX:
+        oldest = min(_flash_cache, key=lambda k: _flash_cache[k][0])
+        _flash_cache.pop(oldest, None)
     return resp
