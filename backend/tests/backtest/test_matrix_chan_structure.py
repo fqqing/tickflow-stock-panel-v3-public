@@ -178,13 +178,14 @@ def test_compute_signals_matches_reference_mapping(_assets):
     assert np.array_equal(signals.exit.astype(bool), expect_exit.astype(bool))
     # 信号码必须能索引回 entry_signal_ids / exit_signal_ids —— 关掉中间某一类后,
     # 下标会整体左移, 用固定的全量映射表会把成交记录标错信号名。
+    # 信号码必须是合法位掩码：每个 code 的置位 bit 都落在 ids 范围内（code < 2^len(ids)）。
     for name, matrix, ids in (
         ("entry", signals.entry_signal_code, signals.entry_signal_ids),
         ("exit", signals.exit_signal_code, signals.exit_signal_ids),
     ):
         active = matrix[matrix >= 0]
         assert active.size > 0, name
-        assert active.min() >= 0 and active.max() < len(ids), (name, ids)
+        assert (active > 0).all() and (active < (1 << len(ids))).all(), (name, ids)
     # 合成序列必须真的构出信号, 否则这条对拍是「两边都空」的假通过
     assert int(expect_entry.sum()) > 0, "合成序列没有买点, 对拍无意义"
     assert int(expect_exit.sum()) > 0, "合成序列没有卖点, 对拍无意义"
@@ -250,10 +251,10 @@ def test_buy_kind_switch(_assets):
     only3 = _run(_assets, {"use_1buy": False, "use_3buy": True})
     assert int(only3[0].entry.sum()) < int(both[0].entry.sum())
     assert list(only3[0].entry_signal_ids) == ["signal_chan_3buy"]
-    # 只声明一个类型时, 所有 entry 的信号码只能是 0
+    # 只声明一个类型时, 所有 entry 的信号码只能是 1（bit0 = signal_chan_3buy）
     codes = only3[0].entry_signal_code[only3[0].entry_signal_code >= 0]
     assert codes.size > 0
-    assert set(codes.tolist()) == {0}
+    assert set(codes.tolist()) == {1}
 
 
 def test_short_history_produces_no_signal():

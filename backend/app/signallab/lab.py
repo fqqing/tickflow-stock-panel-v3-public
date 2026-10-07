@@ -217,19 +217,41 @@ def attach_context_features(
     )
 
 
+def _signal_label(sid: str) -> str:
+    """信号 ID -> 归因展示用的简短中文名。
+
+    优先查信号函数注册表（signal_combo 策略的位掩码位序就是信号函数名），取 ``label``；
+    查不到（保持现状策略的 ``signal_xxx`` 策略级信号列）则退回 :data:`SIGNAL_CN` 映射。
+    """
+    try:
+        from app.strategy.signals.registry import get_signal
+
+        return get_signal(sid).label
+    except Exception:
+        return SIGNAL_CN.get(str(sid), str(sid))
+
+
 def signal_name_column(entry_signal_code: pl.Series, signal_ids: Sequence[str]) -> pl.Series:
-    """把信号下标列翻成中文名列(找不到映射时退回 ``signal#i``)。"""
+    """把位掩码列翻成命中信号中文名组合列（多个命中用 ``+`` 连接）。
+
+    ``entry_signal_code`` 是位掩码（bit i 对应 ``signal_ids[i]``），0 或负值表示无信号。
+    一个事件命中多个信号函数时，组合成 ``"MA金叉+放量"`` 这样的字符串，供归因按取值分组。
+    """
     if not signal_ids:
         return pl.Series("entry_signal_name", [None] * entry_signal_code.len(), dtype=pl.Utf8)
-    names = [SIGNAL_CN.get(str(sid), str(sid)) for sid in signal_ids]
+    names = [_signal_label(str(sid)) for sid in signal_ids]
     codes = entry_signal_code.to_list()
     out: list[str | None] = []
     for code in codes:
         if code is None:
             out.append(None)
             continue
-        index = int(code)
-        out.append(names[index] if 0 <= index < len(names) else f"signal#{index}")
+        mask = int(code)
+        if mask <= 0:
+            out.append(None)
+            continue
+        hits = [names[i] for i in range(len(names)) if (mask >> i) & 1]
+        out.append("+".join(hits) if hits else None)
     return pl.Series("entry_signal_name", out, dtype=pl.Utf8)
 
 

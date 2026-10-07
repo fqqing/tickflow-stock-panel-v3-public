@@ -146,8 +146,8 @@ class Chan3BuyEntryMatrixStrategy:
         shape = market.shape
         entry = np.zeros(shape, dtype=np.uint8)
         exit_ = np.zeros(shape, dtype=np.uint8)
-        entry_code = np.full(shape, -1, dtype=np.int16)
-        exit_code = np.full(shape, -1, dtype=np.int16)
+        entry_code = np.full(shape, -1, dtype=np.int64)
+        exit_code = np.full(shape, -1, dtype=np.int64)
 
         exit_ids = tuple(f"signal_chan_{kind}" for kind in sell_kinds) if use_sell_exit else ()
         exit_index = {kind: code for code, kind in enumerate(sell_kinds)}
@@ -189,11 +189,11 @@ class Chan3BuyEntryMatrixStrategy:
                         continue
                     row = int(positions[confirm])
                     entry[row, asset_id] = 1
-                    entry_code[row, asset_id] = 0
+                    entry_code[row, asset_id] = np.int64(1)  # signal_chan_3buy 是唯一入场信号
                 elif use_sell_exit and signal.kind in exit_index:
                     row = int(positions[confirm])
                     exit_[row, asset_id] = 1
-                    exit_code[row, asset_id] = exit_index[signal.kind]
+                    exit_code[row, asset_id] = np.int64(1) << exit_index[signal.kind]
 
         return make_signal_matrix(
             shape,

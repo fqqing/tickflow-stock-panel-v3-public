@@ -32,6 +32,7 @@ class SignalDef:
     category: str
     direction: str  # DIRECTION_ENTRY / DIRECTION_EXIT / DIRECTION_BOTH
     description: str
+    label: str  # 简短中文名，用于 SignalLab 归因展示（命中哪几个信号）
     required_fields: frozenset[str]
     warmup: int
     params: tuple[dict, ...]
@@ -49,6 +50,7 @@ def signal(
     category: str = "通用",
     direction: str = DIRECTION_BOTH,
     description: str = "",
+    label: str = "",
     required_fields: tuple[str, ...] = (),
     warmup: int = 0,
     params: tuple[dict, ...] = (),
@@ -68,6 +70,7 @@ def signal(
         category: 分类（均线/MACD/量价/布林/缠论…），用于前端目录展示。
         direction: 信号方向（entry/exit/both）。
         description: 一句话说明。
+        label: 简短中文名（归因展示用），缺省退回 description。
         required_fields: 依赖的行情字段（close/open/high/low/volume）。
         warmup: 该信号需要的预热根数（组合时取 max）。
         params: 参数定义 list[dict]，每项含 id/label/type/default 等（与策略 META 同构）。
@@ -85,6 +88,7 @@ def signal(
             category=category,
             direction=direction,
             description=description,
+            label=label or description or name,
             required_fields=frozenset(required_fields),
             warmup=int(warmup),
             params=tuple(params),
@@ -122,6 +126,7 @@ def signal_catalog() -> list[dict[str, Any]]:
             "category": s.category,
             "direction": s.direction,
             "description": s.description,
+            "label": s.label,
             "required_fields": sorted(s.required_fields),
             "warmup": s.warmup,
             "params": [dict(p) for p in s.params],

@@ -1796,7 +1796,11 @@ class BacktestEngine:
             return bool(np.isfinite(value) and value > 0)
 
         def _signal_id(code: int, signal_ids: tuple[str, ...]) -> str | None:
-            return signal_ids[code] if 0 <= code < len(signal_ids) else None
+            # 位掩码反解：bit i 对应 signal_ids[i]，多个命中用 "+" 连接（单信号退化为单名）。
+            if code is None or code < 0:
+                return None
+            hits = [signal_ids[i] for i in range(len(signal_ids)) if (code >> i) & 1]
+            return "+".join(hits) if hits else None
 
         def _signal_date(signal_time: int, fallback: str) -> str:
             return matrix.timestamp_labels[signal_time][:10] if signal_time >= 0 else fallback

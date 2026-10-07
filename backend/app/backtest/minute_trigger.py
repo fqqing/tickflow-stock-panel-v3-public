@@ -25,7 +25,9 @@ def build_minute_exit_reference(
     result = np.full(close.shape, np.nan, dtype=np.float32)
 
     def _apply(code: int, value: np.ndarray) -> None:
-        mask = (exit_signal_code == code) & np.isfinite(value) & (value > 0)
+        # 位掩码：检查 bit code 是否置位（注意排除 -1，算术右移会让 -1 所有位为 1）。
+        bit = (exit_signal_code >> code) & 1
+        mask = (exit_signal_code >= 0) & (bit == 1) & np.isfinite(value) & (value > 0)
         result[mask] = value[mask].astype(np.float32)
 
     with np.errstate(divide="ignore", invalid="ignore"):

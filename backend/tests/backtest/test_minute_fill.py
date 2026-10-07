@@ -109,7 +109,7 @@ def test_resolve_minute_exit_trigger_without_next_bar_returns_none():
 def test_minute_exit_reference_removes_current_close_from_ma20():
     close = np.array([[9.0]], dtype=np.float32)
     fields = {"ma20": np.array([[9.95]], dtype=np.float32)}
-    codes = np.array([[0]], dtype=np.int16)
+    codes = np.array([[1]], dtype=np.int64)
 
     result = build_minute_exit_reference(
         close,

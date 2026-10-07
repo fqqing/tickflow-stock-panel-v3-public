@@ -24,6 +24,7 @@ from app.strategy.signals.registry import (
 )
 from app.strategy.signals.combine import (
     compile_expr,
+    compile_expr_with_hits,
     resolve_expr_signals,
     SignalExprError,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "list_signals",
     "signal_catalog",
     "compile_expr",
+    "compile_expr_with_hits",
     "resolve_expr_signals",
     "SignalExprError",
     "library",

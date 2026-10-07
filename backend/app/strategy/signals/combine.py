@@ -60,6 +60,31 @@ def compile_expr(
     return result.astype(bool)
 
 
+def compile_expr_with_hits(
+    expr: str,
+    market: MarketDataMatrix,
+    params: dict[str, Any],
+) -> tuple[np.ndarray | None, dict[str, np.ndarray]]:
+    """编译表达式，并额外收集每个原子信号函数的真值矩阵。
+
+    与 :func:`compile_expr` 的区别：返回 ``(组合结果, hits)``，其中 ``hits`` 是
+    ``{信号函数名: 布尔矩阵}``，供信号组合策略生成「逐信号位掩码」做 SignalLab
+    信号函数级归因。被开关关闭的信号（返回 None）不进入 hits。
+
+    注意：``hits`` 里的键顺序由 ast.walk 的访问顺序决定，与 :func:`resolve_expr_signals`
+    的「首次出现顺序」可能不一致 —— 位掩码的位序应统一用后者（静态、稳定）。
+    """
+    if not isinstance(expr, str) or not expr.strip():
+        raise SignalExprError("signal expr must be a non-empty string")
+    try:
+        tree = ast.parse(expr.strip(), mode="eval")
+    except SyntaxError as exc:
+        raise SignalExprError(f"invalid signal expr {expr!r}: {exc}") from exc
+    hits: dict[str, np.ndarray] = {}
+    result = _eval(tree.body, market, params, hits=hits)
+    return result, hits
+
+
 def resolve_expr_signals(expr: str) -> tuple[str, ...]:
     """静态解析表达式引用的全部信号函数名（不执行），按首次出现顺序返回。
 
@@ -82,16 +107,24 @@ def resolve_expr_signals(expr: str) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _eval(node: ast.AST, market: MarketDataMatrix, params: dict[str, Any]) -> np.ndarray | None:
+def _eval(
+    node: ast.AST,
+    market: MarketDataMatrix,
+    params: dict[str, Any],
+    hits: dict[str, np.ndarray] | None = None,
+) -> np.ndarray | None:
     if isinstance(node, ast.Name):
-        return _invoke_signal(node.id, market, params)
+        result = _invoke_signal(node.id, market, params)
+        if result is not None and hits is not None:
+            hits[node.id] = result
+        return result
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name) or node.func.id not in _COMBINERS:
             raise SignalExprError(
                 f"only all_of/any_of/not_of are allowed, got {ast.unparse(node.func)!r}"
             )
         name = node.func.id
-        args = [_eval(a, market, params) for a in node.args]
+        args = [_eval(a, market, params, hits) for a in node.args]
         # 被关闭的信号（enable_param=False）返回 None，在组合里视为「移除」。
         active = [a for a in args if a is not None]
         if name == "all_of":

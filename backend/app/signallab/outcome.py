@@ -175,7 +175,8 @@ def build_signal_outcomes(
         market: ``backtest/matrix.MarketDataMatrix``, 提供 idx -> date/symbol 的标签与 OHLC。
         entry: ``(交易日, 标的)`` 布尔矩阵, True 表示该标的当日出现入场信号。
         exit_signals: 可选的出场信号布尔矩阵, 用于记录最早一次离场信号出现在第几根。
-        entry_signal_code: 可选的整型矩阵, 标记每个信号来自哪个 signal id(下标).
+        entry_signal_code: 可选的整型矩阵, 位掩码标记每个信号命中了哪些 signal id
+            (bit i 对应 ``entry_signal_ids[i]``)。
         baseline: ``{horizon: np.ndarray}``, 每个交易日全市场同口径收益基准, 由
             ``compute_market_baseline`` 生成; 提供时会额外产出 ``exc_{h}d`` 超额收益列。
         config: 计算口径。
@@ -328,7 +329,7 @@ def build_signal_outcomes(
             data[excess_column(horizon)] = exc_values[horizon]
     if entry_signal_code is not None:
         codes = np.asarray(entry_signal_code)
-        data["entry_signal_code"] = codes[signal_rows, signal_cols].astype(np.int16)
+        data["entry_signal_code"] = codes[signal_rows, signal_cols].astype(np.int64)
 
     frame = pl.DataFrame(data)
     # 「先止损还是先止盈」只有在两者都触及的样本上有意义, 其余保持 null 而不是 False,

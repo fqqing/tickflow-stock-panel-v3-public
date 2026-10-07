@@ -4,8 +4,9 @@
 即可，加载期由 :class:`SignalComboStrategy` 编译成实现 :class:`MatrixStrategy` 协议的
 实例，交由 engine 归一化为 ``matrix_native`` 后端 —— 回测 / SignalLab / 实时零改动接入。
 
-信号码（首版）：entry/exit 各用一个组合事件，信号码恒为 0（对应 signal_ids 的
-第一个元素）。策略声明多个 signal_ids 仅作标签保留，逐信号位掩码归因留待后续。
+信号码（位掩码）：entry/exit 各用「每个信号函数占一位」的位掩码，bit i 对应
+``entry_signal_ids[i]``（= 表达式引用的信号函数名，按首次出现顺序）。命中即置位，
+SignalLab 据此反解「这个事件命中了哪几个信号函数」做信号函数级归因。
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from app.backtest.matrix import (
     SignalMatrix,
     make_signal_matrix,
 )
-from app.strategy.signals.combine import compile_expr, resolve_expr_signals
+from app.strategy.signals.combine import compile_expr_with_hits, resolve_expr_signals
 from app.strategy.signals.registry import get_signal
 
 
@@ -40,11 +41,15 @@ class SignalComboStrategy:
             )
         self.entry_expr = (entry_expr or "").strip()
         self.exit_expr = (exit_expr or "").strip()
-        self.entry_signal_ids = tuple(entry_signal_ids)
-        self.exit_signal_ids = tuple(exit_signal_ids)
+        # entry_signal_ids / exit_signal_ids 仅保留签名兼容（engine 传入策略声明的
+        # ENTRY_SIGNALS 策略级信号列）。SignalLab 归因已细化为「信号函数级」，位掩码
+        # 位序统一用表达式引用的信号函数名（resolve_expr_signals 的首次出现顺序）。
+        del entry_signal_ids, exit_signal_ids
 
         self._entry_signals = resolve_expr_signals(self.entry_expr)
         self._exit_signals = resolve_expr_signals(self.exit_expr)
+        self.entry_signal_ids = self._entry_signals
+        self.exit_signal_ids = self._exit_signals
         referenced = set(self._entry_signals) | set(self._exit_signals)
         if not referenced:
             raise ValueError("signal expr 未引用任何已注册信号函数")
@@ -73,23 +78,57 @@ class SignalComboStrategy:
         market: MarketDataMatrix,
         params: dict[str, Any],
     ) -> SignalMatrix:
-        entry = (
-            compile_expr(self.entry_expr, market, params)
-            if self.entry_expr
-            else np.zeros(market.shape, dtype=bool)
-        )
-        exit_ = (
-            compile_expr(self.exit_expr, market, params)
-            if self.exit_expr
-            else np.zeros(market.shape, dtype=bool)
-        )
-        # 单事件：命中信号码恒为 0（entry_signal_ids 的第一个下标）。
+        shape = market.shape
+        if self.entry_expr:
+            entry_raw, entry_hits = compile_expr_with_hits(self.entry_expr, market, params)
+            entry = (
+                np.ones(shape, dtype=bool)
+                if entry_raw is None
+                else entry_raw.astype(bool)
+            )
+        else:
+            entry = np.zeros(shape, dtype=bool)
+            entry_hits: dict[str, np.ndarray] = {}
+        if self.exit_expr:
+            exit_raw, exit_hits = compile_expr_with_hits(self.exit_expr, market, params)
+            exit_ = (
+                np.ones(shape, dtype=bool)
+                if exit_raw is None
+                else exit_raw.astype(bool)
+            )
+        else:
+            exit_ = np.zeros(shape, dtype=bool)
+            exit_hits: dict[str, np.ndarray] = {}
+        # 位掩码：每个信号函数一位，命中置位。未命中事件处保持 -1（无信号）。
         return make_signal_matrix(
-            market.shape,
+            shape,
             entry=entry.astype(np.uint8),
             exit=exit_.astype(np.uint8),
-            entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
-            exit_signal_code=np.where(exit_, 0, -1).astype(np.int16),
+            entry_signal_code=_hits_to_mask(entry_hits, self._entry_signals, entry, shape),
+            exit_signal_code=_hits_to_mask(exit_hits, self._exit_signals, exit_, shape),
             entry_signal_ids=self.entry_signal_ids,
             exit_signal_ids=self.exit_signal_ids,
         )
+
+
+def _hits_to_mask(
+    hits: dict[str, np.ndarray],
+    names: tuple[str, ...],
+    combined: np.ndarray,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """把各信号函数真值矩阵折叠成位掩码矩阵。
+
+    ``names`` 是位序（resolve_expr_signals 的首次出现顺序，含被关闭的信号），
+    bit i 对应 ``names[i]``。被开关关闭的信号（hits 里没有）位恒 0。仅在事件命中处
+    写位掩码，其余保持 -1。
+    """
+    code = np.full(shape, -1, dtype=np.int64)
+    acc = np.zeros(shape, dtype=np.int64)
+    for i, name in enumerate(names):
+        mask = hits.get(name)
+        if mask is None:
+            continue
+        acc = acc | np.where(mask, np.int64(1) << i, np.int64(0))
+    code[combined] = acc[combined]
+    return code

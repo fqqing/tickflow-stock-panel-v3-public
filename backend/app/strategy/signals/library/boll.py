@@ -12,6 +12,7 @@ from app.strategy.signals.registry import signal, DIRECTION_ENTRY, DIRECTION_EXI
     category="布林",
     direction=DIRECTION_ENTRY,
     description="收盘价突破布林上轨",
+    label="突破布林上轨",
     required_fields=("close",),
     warmup=20,
     enable_param="require_boll_breakout",
@@ -27,6 +28,7 @@ def boll_breakout_upper(market: MarketDataMatrix, **params) -> np.ndarray:
     category="布林",
     direction=DIRECTION_EXIT,
     description="收盘价跌破布林下轨",
+    label="跌破布林下轨",
     required_fields=("close",),
     warmup=20,
 )

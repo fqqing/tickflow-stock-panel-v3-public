@@ -1386,7 +1386,12 @@ class StrategyEngine:
         hits = []
         for asset_id in np.flatnonzero(active != 0):
             code = int(codes[int(asset_id)])
-            signals = [signal_ids[code]] if 0 <= code < len(signal_ids) else []
+            # 位掩码：bit i 对应 signal_ids[i]，命中即收入（支持多信号命中）。
+            signals = [
+                signal_ids[i]
+                for i in range(len(signal_ids))
+                if code > 0 and (code >> i) & 1
+            ]
             hits.append({"symbol": symbols[int(asset_id)], "signals": signals})
         return hits
 

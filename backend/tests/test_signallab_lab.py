@@ -110,13 +110,14 @@ def test_context_features_skipped_on_shape_mismatch() -> None:
 
 
 def test_signal_name_column_maps_code_to_cn() -> None:
-    series = pl.Series("entry_signal_code", [0, 1, 2, None], dtype=pl.Int16)
+    series = pl.Series("entry_signal_code", [1, 2, 4, 3, None], dtype=pl.Int64)
     names = signal_name_column(series, ("signal_bottom_structure", "signal_stale_nine_turn"))
-    assert names.to_list() == ["底部结构", "钝化加低九", "signal#2", None]
+    # 位掩码：1→底部结构, 2→钝化加低九, 4→越界无命中, 3→两者都命中
+    assert names.to_list() == ["底部结构", "钝化加低九", None, "底部结构+钝化加低九", None]
 
 
 def test_signal_name_column_without_signal_ids() -> None:
-    series = pl.Series("entry_signal_code", [0], dtype=pl.Int16)
+    series = pl.Series("entry_signal_code", [1], dtype=pl.Int64)
     assert signal_name_column(series, ()).to_list() == [None]
 
 

@@ -2232,8 +2232,8 @@ def make_signal_matrix(
     entry_array = _coerce_array(entry, shape, np.uint8, 0)
     exit_array = _coerce_array(exit, shape, np.uint8, 0)
     score_array = _coerce_array(score, shape, np.float32, 0.0)
-    entry_codes = _coerce_array(entry_signal_code, shape, np.int16, -1)
-    exit_codes = _coerce_array(exit_signal_code, shape, np.int16, -1)
+    entry_codes = _coerce_array(entry_signal_code, shape, np.int64, -1)
+    exit_codes = _coerce_array(exit_signal_code, shape, np.int64, -1)
     return _finalize_signal_matrix(
         entry_array,
         exit_array,
@@ -2276,8 +2276,8 @@ def validate_signal_matrix(signals: SignalMatrix, shape: tuple[int, int]) -> Non
         "entry": (signals.entry, np.dtype(np.uint8)),
         "exit": (signals.exit, np.dtype(np.uint8)),
         "score": (signals.score, np.dtype(np.float32)),
-        "entry_signal_code": (signals.entry_signal_code, np.dtype(np.int16)),
-        "exit_signal_code": (signals.exit_signal_code, np.dtype(np.int16)),
+        "entry_signal_code": (signals.entry_signal_code, np.dtype(np.int64)),
+        "exit_signal_code": (signals.exit_signal_code, np.dtype(np.int64)),
     }
     for name, (array, dtype) in specs.items():
         if not isinstance(array, np.ndarray):
@@ -2795,13 +2795,14 @@ def _signal_code_matrix(
     asset_id: np.ndarray,
 ) -> tuple[np.ndarray, tuple[str, ...]]:
     normalized = tuple(_normalize_signal(signal) for signal in (signal_ids or []))
-    row_codes = np.full(len(panel), -1, dtype=np.int16)
+    # 位掩码：每个 signal id 一位，命中置位。多位同时命中则多位叠加（不再只记第一个）。
+    row_codes = np.zeros(len(panel), dtype=np.int64)
     for code, column in enumerate(normalized):
         if column not in panel.columns:
             continue
         mask = panel[column].fill_null(False).cast(pl.Boolean).to_numpy()
-        row_codes[(row_codes < 0) & mask] = code
-    codes = np.full(shape, -1, dtype=np.int16)
+        row_codes = row_codes | np.where(mask, np.int64(1) << code, np.int64(0))
+    codes = np.full(shape, -1, dtype=np.int64)
     codes[time_id, asset_id] = row_codes
     return codes, normalized
 
@@ -2829,7 +2830,7 @@ def _delay_signal_matrix(
     shape = raw.shape
     output = np.zeros(shape, dtype=np.uint8)
     signal_time = np.full(shape, -1, dtype=np.int32)
-    signal_code = np.full(shape, -1, dtype=np.int16)
+    signal_code = np.full(shape, -1, dtype=np.int64)
     for asset_id in range(shape[1]):
         rows = np.flatnonzero(present[:, asset_id])
         if len(rows) <= delay_bars:
@@ -3884,8 +3885,8 @@ class MatrixStrategyPipeline:
                 fallback=signals.score,
                 directions=config.scoring_directions,
             )
-            entry_codes = np.where(entry != 0, signals.entry_signal_code, -1).astype(np.int16)
-            exit_codes = np.where(signals.exit != 0, signals.exit_signal_code, -1).astype(np.int16)
+            entry_codes = np.where(entry != 0, signals.entry_signal_code, -1).astype(np.int64)
+            exit_codes = np.where(signals.exit != 0, signals.exit_signal_code, -1).astype(np.int64)
         if timing_ms is not None:
             timing_ms["filter_score"] = round(
                 (time.perf_counter() - filter_started) * 1000,
@@ -4468,8 +4469,8 @@ def apply_time_masks(
     exit_ = np.array(signals.exit, dtype=np.uint8, copy=True)
     entry[~entry_mask] = 0
     exit_[~exit_mask] = 0
-    entry_codes = np.array(signals.entry_signal_code, dtype=np.int16, copy=True)
-    exit_codes = np.array(signals.exit_signal_code, dtype=np.int16, copy=True)
+    entry_codes = np.array(signals.entry_signal_code, dtype=np.int64, copy=True)
+    exit_codes = np.array(signals.exit_signal_code, dtype=np.int64, copy=True)
     entry_codes[entry == 0] = -1
     exit_codes[exit_ == 0] = -1
     return _finalize_signal_matrix(

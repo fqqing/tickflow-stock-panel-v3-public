@@ -238,15 +238,15 @@ def merge_signal_matrices(
     merged_score = np.nan_to_num(merged_score, nan=0.0, posinf=0.0, neginf=0.0)
 
     # ── entry_signal_code: 来源标记 ──
-    # code = 命中的第一个子策略索引; -1 表示无命中。归因用。
-    entry_codes = np.full(shape, -1, dtype=np.int16)
+    # code = 命中的第一个子策略位(位掩码, bit i = children[i]); -1 表示无命中。归因用。
+    entry_codes = np.full(shape, -1, dtype=np.int64)
     for i in range(n_children):
         # 只给尚未标记的命中点打 code(第一个命中优先), 避免覆盖。
         untagged = (entry_codes == -1) & entries[i]
-        entry_codes[untagged] = i
+        entry_codes[untagged] = np.int64(1) << i
 
     # exit_signal_code 沿用 -1(无独立信号来源); 回测按 "signal" reason 归因即可。
-    exit_codes = np.full(shape, -1, dtype=np.int16)
+    exit_codes = np.full(shape, -1, dtype=np.int64)
 
     # entry_signal_ids 映射表: code i → "composite:child_id"
     entry_signal_ids = tuple(f"composite:{cid}" for cid, _ in children)

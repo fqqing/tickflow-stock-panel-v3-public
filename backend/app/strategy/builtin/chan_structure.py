@@ -109,11 +109,11 @@ class ChanStructureMatrixStrategy:
 
         entry = np.zeros(shape, dtype=np.uint8)
         exit_ = np.zeros(shape, dtype=np.uint8)
-        entry_code = np.full(shape, -1, dtype=np.int16)
-        exit_code = np.full(shape, -1, dtype=np.int16)
+        entry_code = np.full(shape, -1, dtype=np.int64)
+        exit_code = np.full(shape, -1, dtype=np.int64)
 
-        # ⚠️ 信号码必须是**声明列表里的下标**, 不能按全量 kind 顺序固定映射 ——
-        # 关掉二买后 3buy 的下标会从 2 变成 1, 用固定表会让成交记录标错信号名。
+        # ⚠️ 信号码必须是**声明列表里的位**（位掩码 bit = 声明列表下标），不能按全量
+        # kind 顺序固定映射 —— 关掉二买后 3buy 的下标会从 2 变成 1，用固定表会标错信号名。
         entry_ids = tuple(f"signal_chan_{kind}" for kind in buy_kinds)
         exit_ids = tuple(f"signal_chan_{kind}" for kind in sell_kinds) if use_sell_exit else ()
         entry_index = {kind: code for code, kind in enumerate(buy_kinds)}
@@ -147,10 +147,10 @@ class ChanStructureMatrixStrategy:
                 row = int(positions[confirm])
                 if signal.kind in entry_index:
                     entry[row, asset_id] = 1
-                    entry_code[row, asset_id] = entry_index[signal.kind]
+                    entry_code[row, asset_id] = np.int64(1) << entry_index[signal.kind]
                 elif use_sell_exit and signal.kind in exit_index:
                     exit_[row, asset_id] = 1
-                    exit_code[row, asset_id] = exit_index[signal.kind]
+                    exit_code[row, asset_id] = np.int64(1) << exit_index[signal.kind]
 
         return make_signal_matrix(
             shape,

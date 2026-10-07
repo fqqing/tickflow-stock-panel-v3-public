@@ -132,8 +132,8 @@ class FactorRankResearchMatrixStrategy:
             entry=entry.astype(np.uint8),
             exit=exit_.astype(np.uint8),
             score=score,
-            entry_signal_code=np.where(entry, 0, -1).astype(np.int16),
-            exit_signal_code=np.where(exit_, 0, -1).astype(np.int16),
+            entry_signal_code=np.where(entry, 1, -1).astype(np.int64),
+            exit_signal_code=np.where(exit_, 1, -1).astype(np.int64),
             entry_signal_ids=("signal_factor_rank_entry",),
             exit_signal_ids=("signal_factor_rank_exit",),
         )

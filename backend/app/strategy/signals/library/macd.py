@@ -12,6 +12,7 @@ from app.strategy.signals.registry import signal, DIRECTION_ENTRY, DIRECTION_EXI
     category="MACD",
     direction=DIRECTION_ENTRY,
     description="MACD DIF 上穿 DEA",
+    label="MACD金叉",
     required_fields=("close",),
     warmup=60,
     enable_param="require_macd_golden",
@@ -30,6 +31,7 @@ def macd_golden(market: MarketDataMatrix, **params) -> np.ndarray:
     category="MACD",
     direction=DIRECTION_EXIT,
     description="MACD DIF 下穿 DEA",
+    label="MACD死叉",
     required_fields=("close",),
     warmup=60,
 )
