@@ -7,6 +7,7 @@ import logging
 import math
 import threading
 import time
+from collections import OrderedDict
 from datetime import date, timedelta
 from functools import lru_cache
 from typing import Optional
@@ -981,6 +982,45 @@ _INDICATOR_WARMUP_DAYS = {
     "macd_structure": 540,
 }
 
+# 指标 warmup 单票/指数历史 LRU 缓存。
+# K 线带自定义指标时, structure/macd_structure 需要 540 天 warmup, 取数起点提前到
+# enriched 历史缓存(约 300 交易日)之外, 退化为反复扫描按日期分区的 parquet 文件
+# (每文件含全市场 ~5500 只, 单票过滤一次 2.6s+)。这里缓存 warmup 历史, 命中后指标
+# 计算降到 ~100ms 级。盘中实时蜡烛由调用方在取数后覆盖, 不受本缓存影响。
+_IND_WARMUP_CACHE: "OrderedDict[tuple[str, str], tuple[date, str, dict[str, dict]]]" = OrderedDict()
+_IND_WARMUP_CACHE_MAX = 128
+_IND_WARMUP_LOCK = threading.Lock()
+
+
+def _get_warmup_history(
+    repo, asset_type: str, symbol: str, warmup_start: date, end: date, market: str, columns: list[str]
+) -> dict[str, dict]:
+    """带 LRU 缓存的指标 warmup 取数, 返回 {YYYY-MM-DD: record} 的逐日字典。
+
+    命中条件: 同一天(cn_today) 且缓存的 warmup_start 早于等于本次(覆盖更多历史, 超集可用)。
+    columns 由调用方指定(个股 OHLC / 指数 close), key 用 (asset_type, symbol) 区分。
+    """
+    global _IND_WARMUP_CACHE
+    today_key = cn_today().isoformat()
+    cache_key = (asset_type, symbol)
+    with _IND_WARMUP_LOCK:
+        entry = _IND_WARMUP_CACHE.get(cache_key)
+        if entry is not None and entry[1] == today_key and entry[0] <= warmup_start:
+            _IND_WARMUP_CACHE.move_to_end(cache_key)
+            return entry[2]
+
+    history: dict[str, dict] = {}
+    hist_df = repo.get_daily_asset(asset_type, symbol, warmup_start, end, columns=columns, market=market)
+    for record in hist_df.iter_rows(named=True):
+        history[_date_key(record.get("date"))] = record
+
+    with _IND_WARMUP_LOCK:
+        _IND_WARMUP_CACHE[cache_key] = (warmup_start, today_key, history)
+        _IND_WARMUP_CACHE.move_to_end(cache_key)
+        while len(_IND_WARMUP_CACHE) > _IND_WARMUP_CACHE_MAX:
+            _IND_WARMUP_CACHE.popitem(last=False)
+    return history
+
 
 def _date_key(value: object) -> str:
     """把 date/datetime/字符串统一成 YYYY-MM-DD, 用于跨表按日对齐。"""
@@ -1060,21 +1100,16 @@ def _attach_indicators(
     today_key = cn_today().isoformat()
     warmup_start = start - timedelta(days=max(_INDICATOR_WARMUP_DAYS[key] for key in keys))
 
-    # 逐日 OHLC: 先用仓库里的长历史打底, 再用请求区间内的行覆盖 (含今日实时蜡烛)
-    history: dict[str, dict] = {}
+    # 逐日 OHLC: 先用仓库里的长历史打底, 再用请求区间内的行覆盖 (含今日实时蜡烛)。
+    # 取数走 LRU 缓存 —— 540 天 warmup 反复 scan 按日期分区 parquet 是 K 线慢的主因。
     try:
-        hist_df = repo.get_daily_asset(
-            asset_type,
-            symbol,
-            warmup_start,
-            end,
-            columns=["date", "open", "high", "low", "close"],
-            market=market,
+        history = _get_warmup_history(
+            repo, asset_type, symbol, warmup_start, end, market,
+            ["date", "open", "high", "low", "close"],
         )
-        for record in hist_df.iter_rows(named=True):
-            history[_date_key(record.get("date"))] = record
     except Exception as exc:  # noqa: BLE001
         logger.debug("指标预热取历史 %s 失败: %s", symbol, exc)
+        history = {}
 
     for row in rows:
         # 合并而不是覆盖: fields 过滤后的请求行可能缺 OHLC (如 fields=date,cm_value),
@@ -1136,15 +1171,14 @@ def _attach_indicators(
         index_map: dict[str, float] = {}
         try:
             # 基准恒为 A 股指数, 故显式 cn -- 不跟随个股市场
-            index_df = repo.get_daily_asset(
-                "index", index_symbol, warmup_start, end, columns=["date", "close"], market="cn"
+            index_history = _get_warmup_history(
+                repo, "index", index_symbol, warmup_start, end, "cn", ["date", "close"]
             )
-            if not index_df.is_empty():
-                index_map = {
-                    _date_key(d): float(c)
-                    for d, c in index_df.select(["date", "close"]).iter_rows()
-                    if c is not None and math.isfinite(float(c)) and float(c) > 0
-                }
+            index_map = {
+                day: float(rec["close"])
+                for day, rec in index_history.items()
+                if rec.get("close") is not None and math.isfinite(float(rec["close"])) and float(rec["close"]) > 0
+            }
         except Exception as exc:  # noqa: BLE001
             logger.debug("资金动能取指数 %s 失败: %s", index_symbol, exc)
 
