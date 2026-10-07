@@ -624,7 +624,9 @@ export function KLinePro({
     const chart = chartRef.current
     if (!chart) return
     rowsRef.current = rows
-    chart.resetData()
+    // rows 为空(换股瞬间/首次加载中)时不 resetData —— resetData 会触发 loader 的
+    // 'init' 并 _clearData(), 空数据会把刚画上的 K 线清空; 等非空数据到位再重绘。
+    if (rows.length > 0) chart.resetData()
   }, [rows])
 
   // 点击 K 线 -> 回调日期(分时联动)。仅日/周/月档触发, 分钟档无分时联动意义。
