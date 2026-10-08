@@ -93,7 +93,16 @@ export function registerVolumeCompareOverlay(): void {
             align: 'center',
             baseline: 'bottom',
           },
-          styles: { color: textColor, size: 8 },
+          styles: {
+            color: textColor,
+            size: 8,
+            // 关掉 klinecharts 默认的蓝底(text 样式默认 backgroundColor: BLUE)
+            backgroundColor: 'transparent',
+            paddingLeft: 0,
+            paddingTop: 0,
+            paddingRight: 0,
+            paddingBottom: 0,
+          },
         })
       }
       return figs

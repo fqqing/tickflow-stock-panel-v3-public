@@ -248,7 +248,11 @@ export function registerStructureOverlay() {
           figs.push({
             type: 'text',
             attrs: { x: p.x, y: p.y + 10, text: String(b.dn), align: 'center', baseline: 'top' },
-            styles: { color: NINE_DN, size: 11, weight: 'bold' },
+            // 九转数字不贴蓝底: klinecharts text 默认 backgroundColor: BLUE
+            styles: {
+              color: NINE_DN, size: 11, weight: 'bold', backgroundColor: 'transparent',
+              paddingLeft: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0,
+            },
           })
         }
         if (b.up) {
@@ -257,7 +261,10 @@ export function registerStructureOverlay() {
           figs.push({
             type: 'text',
             attrs: { x: p.x, y: p.y - 10, text: String(b.up), align: 'center', baseline: 'bottom' },
-            styles: { color: NINE_UP, size: 11, weight: 'bold' },
+            styles: {
+              color: NINE_UP, size: 11, weight: 'bold', backgroundColor: 'transparent',
+              paddingLeft: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0,
+            },
           })
         }
       }

@@ -129,7 +129,16 @@ export function registerEventMarkersOverlay(): void {
                 align: 'center',
                 baseline: isAbove ? 'bottom' : 'top',
               },
-              styles: { color: mk.color, size: 10 },
+              styles: {
+                color: mk.color,
+                size: 10,
+                // 关掉 klinecharts 默认蓝底(text 默认 backgroundColor: BLUE)
+                backgroundColor: 'transparent',
+                paddingLeft: 0,
+                paddingTop: 0,
+                paddingRight: 0,
+                paddingBottom: 0,
+              },
             })
           }
         }

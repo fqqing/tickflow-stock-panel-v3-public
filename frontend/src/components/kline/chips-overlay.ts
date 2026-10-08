@@ -110,7 +110,16 @@ export function registerChipsOverlay() {
               x: bounding.width - 4, y: y - 4, text: `平均成本 ${d.avg_cost.toFixed(2)}`,
               align: 'right', baseline: 'bottom',
             },
-            styles: { color: AVG_LINE, size: 11 },
+            styles: {
+              color: AVG_LINE,
+              size: 11,
+              // 关掉 klinecharts 默认蓝底(text 默认 backgroundColor: BLUE)
+              backgroundColor: 'transparent',
+              paddingLeft: 0,
+              paddingTop: 0,
+              paddingRight: 0,
+              paddingBottom: 0,
+            },
           })
         }
       }

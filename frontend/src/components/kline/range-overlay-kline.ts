@@ -47,7 +47,16 @@ export function registerRangeOverlay() {
           figs.push({
             type: 'text',
             attrs: { x: x + 3, y: 4, text: r.label, align: 'left', baseline: 'top' },
-            styles: { color: '#60A5FA', size: 11 },
+            styles: {
+              color: '#60A5FA',
+              size: 11,
+              // 关掉 klinecharts 默认蓝底(text 默认 backgroundColor: BLUE)
+              backgroundColor: 'transparent',
+              paddingLeft: 0,
+              paddingTop: 0,
+              paddingRight: 0,
+              paddingBottom: 0,
+            },
           })
         }
       }

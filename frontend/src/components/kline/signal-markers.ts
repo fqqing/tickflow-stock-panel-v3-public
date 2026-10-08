@@ -127,7 +127,16 @@ export function registerSignalMarkersOverlay(): void {
                 align: 'center',
                 baseline: isExit ? 'bottom' : 'top',
               },
-              styles: { color, size: 10 },
+              styles: {
+                color,
+                size: 10,
+                // 关掉 klinecharts 默认蓝底(text 默认 backgroundColor: BLUE)
+                backgroundColor: 'transparent',
+                paddingLeft: 0,
+                paddingTop: 0,
+                paddingRight: 0,
+                paddingBottom: 0,
+              },
             })
           }
         }

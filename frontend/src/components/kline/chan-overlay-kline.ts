@@ -119,6 +119,13 @@ export function registerChanOverlay() {
             color: m.kind === 'buy' ? BULL : m.kind === 'sell' ? BEAR : (m.color || '#FACC15'),
             size: 11,
             weight: 'bold',
+            // klinecharts 默认 text 样式带 backgroundColor: BLUE + 4px padding,
+            // 不显式关掉的话每个标签都变成「蓝色方块」, 文字反而看不清。
+            backgroundColor: 'transparent',
+            paddingLeft: 0,
+            paddingTop: 0,
+            paddingRight: 0,
+            paddingBottom: 0,
           },
         })
       }

@@ -206,6 +206,9 @@ export function buildChanOverlay(
       markers.push({
         date,
         kind: side === 'b' ? 'buy' : 'sell',
+        // 买点画在 low 下方、卖点画在 high 上方 —— 不传 above 的话 klinecharts
+        // 侧 (m.above === false 为 false) 会全部画到 high 上, 买点飘在 K 线头顶。
+        above: side === 's',
         label: labels.join('、'),
       })
     }
