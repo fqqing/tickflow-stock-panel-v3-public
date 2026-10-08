@@ -122,3 +122,6 @@ frontend/.parity-tmp/
 frontend/.ssr-tmp/
 # 真机验收截图（可重新生成）
 docs/kline-lab/terminal-*.png
+
+# 公网访问运维备忘（含访问密码与 frp token，勿入库）
+*运维备忘*.md
