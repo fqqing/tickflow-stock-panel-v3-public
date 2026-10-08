@@ -125,6 +125,8 @@ class Stroke:
 
     high: float
     low: float
+    sure: bool = True
+    """True 已确认 / False 未确认（最后一笔常处在未确认状态，渲染时淡化）。"""
 
 
 @dataclass(frozen=True, slots=True)

@@ -94,6 +94,7 @@ def _map_strokes(bi_list) -> tuple[Stroke, ...]:
                 direction=direction,
                 high=max(start_price, end_price),
                 low=min(start_price, end_price),
+                sure=bool(bi.is_sure),
             )
         )
     return tuple(out)

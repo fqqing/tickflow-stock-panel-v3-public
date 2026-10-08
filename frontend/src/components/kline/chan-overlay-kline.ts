@@ -52,10 +52,13 @@ export function registerChanOverlay() {
         // 完全在可视区外则跳过, 避免巨大坐标撑 canvas
         // (bounding.left/right 是 y 轴宽度 inset，不是像素，可视 x 区间是 [0, bounding.width])
         if ((pa.x < 0 && pb.x < 0) || (pa.x > bounding.width && pb.x > bounding.width)) continue
+        const strokeColor = line.color || (line.name?.includes('down') ? BEAR : BULL)
         figs.push({
           type: 'line',
           attrs: { coordinates: [{ x: pa.x, y: pa.y }, { x: pb.x, y: pb.y }] },
-          styles: { color: line.color || (line.name?.includes('down') ? BEAR : BULL), size: line.width ?? 1.5, style: 'solid' },
+          styles: line.dashed
+            ? { color: strokeColor, size: line.width ?? 1.5, style: 'dashed', dashedValue: [4, 3] }
+            : { color: strokeColor, size: line.width ?? 1.5, style: 'solid' },
         })
       }
 
@@ -96,7 +99,7 @@ export function registerChanOverlay() {
         }
       }
 
-      // 买卖点：文字标签（价格从 K 线数据里按日期查）
+      // 买卖点：圆点 + 文字标签（对齐 v2：红买绿卖圆点，价格从 K 线数据里按日期查）
       const data = chart.getDataList()
       const rowByTs = new Map(data.map(d => [d.timestamp, d]))
       for (const m of markers) {
@@ -106,17 +109,26 @@ export function registerChanOverlay() {
         const price = m.above === false ? row.low : row.high
         const p = P(ts, price)
         if (!p) continue
+        const markerColor = m.kind === 'buy' ? BULL : m.kind === 'sell' ? BEAR : (m.color || '#FACC15')
+        const dotY = m.above === false ? p.y + 8 : p.y - 8
+        const textY = m.above === false ? p.y + 18 : p.y - 18
+        // 圆点贴在 K 线低点下方 / 高点上方，文字再往外错一层
+        figs.push({
+          type: 'circle',
+          attrs: { x: p.x, y: dotY, r: 3.5 },
+          styles: { color: markerColor, style: 'fill' },
+        })
         figs.push({
           type: 'text',
           attrs: {
             x: p.x,
-            y: m.above === false ? p.y + 12 : p.y - 12,
+            y: textY,
             text: m.label,
             align: 'center',
             baseline: m.above === false ? 'top' : 'bottom',
           },
           styles: {
-            color: m.kind === 'buy' ? BULL : m.kind === 'sell' ? BEAR : (m.color || '#FACC15'),
+            color: markerColor,
             size: 11,
             weight: 'bold',
             // klinecharts 默认 text 样式带 backgroundColor: BLUE + 4px padding,

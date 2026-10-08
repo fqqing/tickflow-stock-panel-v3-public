@@ -141,6 +141,8 @@ export function buildChanOverlay(
         ],
         color: up ? STROKE_UP_COLOR : STROKE_DOWN_COLOR,
         width: 1.2,
+        // 未确认的最后一笔用虚线（对齐 v2: sure=false 渲染时淡化）
+        dashed: stroke.sure === false,
       })
     }
   }

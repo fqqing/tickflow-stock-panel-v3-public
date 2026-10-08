@@ -593,6 +593,8 @@ export interface ChanStrokePoint {
   end_price: number
   /** +1 向上笔, -1 向下笔 */
   direction: number
+  /** True 已确认 / False 未确认（最后一笔常未确认，渲染时淡化） */
+  sure: boolean
 }
 
 export interface ChanCenter {

@@ -59,6 +59,7 @@ def _serialize(analysis, dates: list[str], symbol: str, name: str | None) -> dic
             "start_price": round(s.start_price, 4),
             "end_price": round(s.end_price, 4),
             "direction": s.direction,
+            "sure": s.sure,
         }
         for s in analysis.strokes
     ]
