@@ -33,10 +33,23 @@ class PushRequest(BaseModel):
 
 @router.get("/status")
 def status():
-    """lark-cli 是否可用 —— 不可用时前端直接禁用推送按钮并给出提示。"""
+    """lark-cli 是否可用 + 用户身份授权是否有效。
+
+    推送通道走 --as user, user 身份 token 会静默过期, 若只报 cli 可用, 用户点下去
+    才在去重读表时撞 token_missing。这里把 user 授权状态一并报出, 前端据此提前提示。
+    """
     cli = lb.find_lark_cli()
     available = bool(shutil.which(cli) or (os.path.isabs(cli) and os.path.exists(cli)))
-    return {"cli": cli, "available": available}
+    out: dict = {"cli": cli, "available": available, "user_ok": None, "user_name": None}
+    if not available:
+        return out
+    auth = lb.user_auth_status()
+    if not auth:
+        return out
+    ident = (auth.get("identities") or {}).get("user") or {}
+    out["user_ok"] = bool(ident.get("available"))
+    out["user_name"] = ident.get("userName") or ident.get("openId")
+    return out
 
 
 @router.get("/tables")

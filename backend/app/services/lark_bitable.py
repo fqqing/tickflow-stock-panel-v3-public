@@ -108,6 +108,26 @@ def find_lark_cli() -> str:
     return names[0]
 
 
+def user_auth_status() -> dict[str, Any] | None:
+    """检查 lark-cli 用户身份授权状态。
+
+    lark-cli 的 user 身份 token 会**静默过期**(从 keychain 丢失), 表现为推送时
+    读表去重直接报 token_missing 中止。这里主动查 `auth status` 返回原始 JSON,
+    让 /api/lark/status 能把「token 失效」提前暴露给前端, 而不是推失败才知道。
+    失败(不可判断)返回 None。
+    """
+    try:
+        proc = _run_cli(["auth", "status"], 30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except ValueError:
+        return None
+
+
 def lark_env(cli_path: str | None = None) -> dict[str, str]:
     """给 lark-cli 子进程补全 PATH。
 

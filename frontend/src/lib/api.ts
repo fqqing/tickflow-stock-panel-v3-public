@@ -4502,6 +4502,9 @@ export interface LarkPushResult {
 export interface LarkStatus {
   cli: string
   available: boolean
+  /** 用户身份授权是否有效 (null = 未探测/不可判断)。token 过期时 false, 推送会失败。 */
+  user_ok: boolean | null
+  user_name: string | null
 }
 
 /** M6 足迹图: 价格(纵) x 时间(横) 的买卖量网格。 */

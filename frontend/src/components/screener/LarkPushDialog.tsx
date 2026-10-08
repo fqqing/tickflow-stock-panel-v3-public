@@ -26,6 +26,8 @@ export function LarkPushDialog({ asOf, minDate, maxDate, market = 'cn', presetNa
   const [loading, setLoading] = useState(true)
   const [cliAvailable, setCliAvailable] = useState<boolean | null>(null)
   const [cliPath, setCliPath] = useState('')
+  const [userOk, setUserOk] = useState<boolean | null>(null)
+  const [userName, setUserName] = useState<string | null>(null)
 
   const [target, setTarget] = useState('')
   const [date, setDate] = useState(asOf || '')
@@ -46,6 +48,8 @@ export function LarkPushDialog({ asOf, minDate, maxDate, market = 'cn', presetNa
         if (!alive) return
         setCliAvailable(st.available)
         setCliPath(st.cli)
+        setUserOk(st.user_ok ?? null)
+        setUserName(st.user_name ?? null)
         setTables(tb.tables)
         const first = tb.tables.find(t => t.configured)
         setTarget(first ? first.id : tb.tables[0]?.id ?? '')
@@ -61,7 +65,7 @@ export function LarkPushDialog({ asOf, minDate, maxDate, market = 'cn', presetNa
   const selected = useMemo(() => tables.find(t => t.id === target), [tables, target])
   // 异动预警的日期由后端缓存口径决定, 面板选的日期对它无效
   const dateDisabled = target === 'abnormal'
-  const canPush = !!target && !!selected?.configured && cliAvailable !== false && !pushing
+  const canPush = !!target && !!selected?.configured && cliAvailable !== false && userOk !== false && !pushing
 
   const handlePush = useCallback(async () => {
     setPushing(true)
@@ -115,6 +119,14 @@ export function LarkPushDialog({ asOf, minDate, maxDate, market = 'cn', presetNa
               <div className="flex items-start gap-2 px-3 py-2 rounded-btn border border-amber-400/20 bg-amber-400/10 text-[11px] text-amber-400">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>未找到 lark-cli ({cliPath || 'lark-cli'}), 推送通道不可用。先在终端确认 <code>npm i -g @larksuiteoapi/lark-cli</code> 已安装并授权。</span>
+              </div>
+            )}
+
+            {/* 用户身份 token 失效: 推送走 --as user, token 会静默过期 */}
+            {cliAvailable !== false && userOk === false && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded-btn border border-amber-400/20 bg-amber-400/10 text-[11px] text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>飞书授权已失效{userName ? ` (账号「${userName}」)` : ''}, 推送会失败。请在终端重新授权: <code>lark-cli auth login</code> 后重试。</span>
               </div>
             )}
 
