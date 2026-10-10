@@ -42,6 +42,8 @@ class PresetRequest(BaseModel):
     asset_type: str = "stock"
     timeframe: str = "1d"
     market: str = "cn"   # cn | hk | us（多市场扩展）
+    # 强制重算, 跳过缓存 (用户点「重载」/ 改完参数要立即生效时用)
+    force: bool = False
 
 
 # 港美股不适用的策略：依赖涨跌停/连板信号（A 股专属概念）
@@ -329,6 +331,33 @@ def run_preset(req: PresetRequest, request: Request):
             raise ValueError(
                 f"strategy {req.strategy_id} 依赖涨停/连板信号,不适用于{req.market.upper()}市场"
             )
+    except ValueError as e:
+        status_code = 404 if "unknown strategy" in str(e) else 400
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
+
+    # ★ 缓存优先: 该 (日期, 策略) 已算过就直接返回缓存明细。
+    #   策略池批量跑 run_all 后每个策略都有缓存, 此时切策略应当秒开; 原先无条件
+    #   engine.run 全量重算, 每次 1~4s, 用户感知为「每点一次策略都要等」。
+    #   用户显式改过参数 / 手动重载时会带 params 或 force 标记, 这里用 overrides
+    #   是否有 params 判定: 有参数覆盖说明用户要的是新参数结果, 不能吃旧缓存。
+    cache_ok = not req.pool and not req.force and not (overrides.get("params") or {})
+    if cache_ok:
+        cached = _cached_with_realtime(request, req.market, str(as_of))
+        raw = (cached.get("results") or {}).get(req.strategy_id)
+        if isinstance(raw, dict) and str(raw.get("as_of")) == str(as_of):
+            return _result_with_ext(
+                {
+                    "as_of": raw.get("as_of"),
+                    "strategy": req.strategy_id,
+                    "rows": raw.get("rows") or [],
+                    "total": int(raw.get("total") or 0),
+                    "elapsed_ms": 0.0,
+                    "from_cache": True,
+                },
+                ext_values,
+            )
+
+    try:
         params = dict(overrides.get("params") or {})
         context = svc.build_strategy_context(
             engine,

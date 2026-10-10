@@ -20,12 +20,34 @@ function kv<T>(key: string) {
   }
 }
 
+/** sessionStorage 版 kv: 只在当前标签页会话内有效, 关标签页即清。
+ *  适合「列表页筛选/选中项」这类跨路由返回要保留、但不该跨会话残留的状态。 */
+function kvSession<T>(key: string) {
+  return {
+    get(fallback: T): T {
+      try {
+        const raw = sessionStorage.getItem(key)
+        if (raw !== null) return JSON.parse(raw) as T
+      } catch { /* ignore */ }
+      return fallback
+    },
+    set(val: T) {
+      try { sessionStorage.setItem(key, JSON.stringify(val)) } catch { /* ignore */ }
+    },
+  }
+}
+
 export const storage = {
   /** 查询轮询 / SSE 配置 */
   queryConfig:          kv<unknown>('tf-stocks-query-config'),
 
   /** 策略池 (screener) */
   strategyPool:         kv<string[]>('strategy-pool'),
+
+  /** 策略页当前选中的策略 ID —— 跳转个股终端再返回时要恢复现场,
+   *  否则组件重新挂载后 state 归零, 用户得重新点一次策略。
+   *  用 sessionStorage: 只在本标签页会话内保持, 关页即清。 */
+  screenerActiveStrategy: kvSession<string | null>('screener_active_strategy'),
 
   /** 自选列表列配置 */
   watchlistColumns:     kv<unknown[]>('watchlist_columns'),

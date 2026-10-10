@@ -53,7 +53,7 @@ export function Screener() {
   // 多市场扩展：跟随侧边栏全局市场切换器（useMarket），页面不再维护局部市场状态。
   // 切市场时清除当前结果，避免把上一市场的结果当成当前市场展示。
   const { market } = useMarket()
-  const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
+  const [activeStrategy, setActiveStrategy] = useState<string | null>(() => storage.screenerActiveStrategy.get(null))
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
   const [batchMsg, setBatchMsg] = useState<string>('')
@@ -130,6 +130,13 @@ export function Screener() {
   const [expiredCounts, setExpiredCounts] = useState<Record<string, number>>({})
   // 各策略显示上限 (null = 全部)
   const [strategyLimits, setStrategyLimits] = useState<Record<string, number | null>>({})
+
+  // 选中策略持久化到 sessionStorage: 跳转个股终端页会卸载本页组件, 返回时
+  // state 归零 → 用户要重新点策略。存下来后返回能直接恢复现场 (result 由
+  // singleCachedQuery 依据 activeStrategy + asOf 自动秒恢复, 不必重跑)。
+  useEffect(() => {
+    storage.screenerActiveStrategy.set(activeStrategy)
+  }, [activeStrategy])
 
   // 筛选条件变化时同步到 map（供切换策略时读取最新值）
   useEffect(() => {
@@ -565,8 +572,8 @@ export function Screener() {
   }, [asOf, strategyPresets.length, summaryQuery.isSuccess, visiblePool, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, runAll.isPending, requestRunAll])
 
   const run = useMutation({
-    mutationFn: ({ id, date }: { id: string; date: string }) =>
-      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, market),
+    mutationFn: ({ id, date, force }: { id: string; date: string; force?: boolean }) =>
+      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, market, force ?? false),
     onSuccess: (data, vars) => {
       setResult(data)
       // 同步更新卡片上的命中数
@@ -1111,7 +1118,8 @@ export function Screener() {
         onSaved={(limit) => {
           if (settingsStrategyId) {
             setStrategyLimits(prev => ({ ...prev, [settingsStrategyId]: limit }))
-            run.mutate({ id: settingsStrategyId, date: asOf })
+            // 参数已改 → 必须 force 跳过缓存, 否则后端会把改动前的旧结果原样返回
+            run.mutate({ id: settingsStrategyId, date: asOf, force: true })
           }
         }}
         onAiModify={async () => {

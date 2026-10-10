@@ -620,14 +620,19 @@ export function KLinePro({
   }, [ct, ready])
 
   // 数据刷新
+  // ⚠️ 依赖必须带 ready: 从「策略页弹窗」SPA 跳转过来时, React Query 已缓存这只股的
+  // 日线(弹窗里查过), rows 会在 chart 初始化 effect 跑完之前就到位 —— 此时
+  // chartRef.current 还是 null, effect 直接 return; 等 ready 转 true 后 rows 没变,
+  // 本 effect 永不重跑 → rowsRef 始终为空 → loader 'init' 灌空数据 → K 线永久空白
+  // (刷新页面才正常, 因为首次加载顺序相反)。带上 ready 后 chart 就绪会再跑一次。
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart) return
+    if (!chart || !ready) return
     rowsRef.current = rows
     // rows 为空(换股瞬间/首次加载中)时不 resetData —— resetData 会触发 loader 的
     // 'init' 并 _clearData(), 空数据会把刚画上的 K 线清空; 等非空数据到位再重绘。
     if (rows.length > 0) chart.resetData()
-  }, [rows])
+  }, [rows, ready])
 
   // 点击 K 线 -> 回调日期(分时联动)。仅日/周/月档触发, 分钟档无分时联动意义。
   useEffect(() => {
