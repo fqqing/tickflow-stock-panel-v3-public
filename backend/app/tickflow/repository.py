@@ -85,6 +85,33 @@ def _last_available_rows(df: pl.DataFrame, cutoff: date) -> pl.DataFrame:
     )
 
 
+class _GatedConnection:
+    """DuckDB 连接门控代理: 后台视图注册完成前, 查询在此 Event 上等待。
+
+    DuckDB 建 ``read_parquet('dir/**/*.parquet')`` 视图时要打开全部 parquet 的
+    footer 来推断列, 本库 ``kline_daily``/``kline_enriched`` 各有 ~6484 个日期分区,
+    30+ 个视图累计 50s+。注册挪到后台线程后, 应用启动不再被阻塞; 真正访问视图的
+    查询在此等一下即可 (通常注册早已完成)。所有非 ``execute`` 的属性/方法调用
+    直接透传到底层连接。
+    """
+
+    def __init__(self, raw, ready: "threading.Event", timeout: float = 180.0) -> None:
+        self._raw = raw
+        self._ready = ready
+        self._timeout = timeout
+
+    def execute(self, *args, **kwargs):
+        if not self._ready.is_set() and not self._ready.wait(timeout=self._timeout):
+            logger.warning(
+                "duckdb 视图注册超时(%.0fs), 继续执行查询(视图可能尚未就绪)",
+                self._timeout,
+            )
+        return self._raw.execute(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
 class DataStore:
     """唯一的存储入口 — 进程启动时创建。"""
 
@@ -136,8 +163,15 @@ class DataStore:
             (self.data_dir / "financials" / sub).mkdir(parents=True, exist_ok=True)
 
         # DuckDB 内存模式 — 不建 .db 文件(§7.1)
-        self.db = duckdb.connect(database=":memory:")
-        self._register_views()
+        self._raw_db = duckdb.connect(database=":memory:")
+        self._views_ready = threading.Event()
+        self._register_lock = threading.RLock()
+        # 视图注册要为每个 glob 打开上千个 parquet footer (实测 50s+)。放后台线程,
+        # 启动立即继续; 首个真正访问视图的查询会等 _views_ready 就绪 (通常已在跑)。
+        self.db = _GatedConnection(self._raw_db, self._views_ready)
+        threading.Thread(
+            target=self._register_views_bg, name="duckdb-view-register", daemon=True
+        ).start()
 
     def _migrate_legacy_data_dir(self) -> None:
         """把旧桌面版数据目录 (<安装目录>/../TickFlowStockPanel_Data/) 迁移到新位置 (<安装目录>/data/)。
@@ -197,8 +231,21 @@ class DataStore:
         except Exception as e:  # noqa: BLE001
             logger.warning("legacy data migration failed (startup continues): %s", e)
 
+    def _register_views_bg(self) -> None:
+        """后台线程入口: 注册全部视图后置位 Event, 唤醒等待中的查询。"""
+        try:
+            self._register_views()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("duckdb 视图注册失败(启动继续): %s", e)
+        finally:
+            self._views_ready.set()
+
     def _register_views(self) -> None:
-        """把 Parquet 目录挂载为 DuckDB 视图(§7.3)。"""
+        """把 Parquet 目录挂载为 DuckDB 视图(§7.3)。线程安全, 可重复调用。"""
+        with self._register_lock:
+            self._register_views_unlocked()
+
+    def _register_views_unlocked(self) -> None:
         d = self.data_dir.as_posix()
         statements = [
             f"""CREATE OR REPLACE VIEW kline_daily AS
@@ -268,7 +315,7 @@ class DataStore:
         ]
         for sql in statements:
             try:
-                self.db.execute(sql)
+                self._raw_db.execute(sql)
             except Exception as e:  # noqa: BLE001
                 # 空数据目录(首次启动)或权限问题时 DuckDB 会抛 IOException;
                 # 跨版本/平台也可能抛 CatalogException 等。空目录缺视图不影响启动
@@ -285,6 +332,10 @@ class DataStore:
         Physical storage remains split for performance and compatibility. These
         views are convenience read models for new APIs/features.
         """
+        with self._register_lock:
+            self._register_unified_views_unlocked()
+
+    def _register_unified_views_unlocked(self) -> None:
         daily_parts: list[str] = []
         enriched_parts: list[str] = []
         minute_parts: list[str] = []
@@ -356,7 +407,7 @@ class DataStore:
             if not parts:
                 continue
             try:
-                self.db.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(parts))
+                self._raw_db.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(parts))
             except Exception as e:  # noqa: BLE001
                 logger.debug("unified view %s skipped: %s", name, e)
 
