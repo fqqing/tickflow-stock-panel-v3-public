@@ -156,8 +156,8 @@
 
 ## 🧵 本层增量：缠论体系与策略工程
 
-> **衍生链**：[`hzy1522/tickflow-stock-panel`](https://github.com/hzy1522/tickflow-stock-panel)（原创）
-> → [`shy3130/tickflow-stock-panel`](https://github.com/shy3130/tickflow-stock-panel)（多市场扩展）
+> **衍生链**：[`shy3130/tickflow-stock-panel`](https://github.com/shy3130/tickflow-stock-panel)（原创）
+> → [`hzy1522/tickflow-stock-panel`](https://github.com/hzy1522/tickflow-stock-panel)（多市场扩展）
 > → **本仓库**。
 >
 > 上一节的「多市场扩展」来自 shy3130 那一层；本节列出的是本层在其之上新增的部分。
@@ -475,8 +475,8 @@ PORT=3018                      # 服务端口
 
 ```
 Copyright (c) 2026 tickflow-stock-panel contributors   # 原创项目版权，完整保留
-Copyright (c) 2026 hzy1522                             # 原创作者
-Copyright (c) 2026 shy3130                             # 多市场扩展层（A股/港股/美股）
+Copyright (c) 2026 shy3130                             # 原创作者
+Copyright (c) 2026 hzy1522                             # 多市场扩展层（A股/港股/美股）
 Copyright (c) 2026 川秦 (fqqing)                        # 本层增量（缠论体系与策略工程）
 ```
 
