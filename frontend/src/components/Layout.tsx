@@ -56,6 +56,9 @@ import {
   PanelLeftOpen,
   GitBranch,
   Library,
+  LogOut,
+  Users,
+  UserRound,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -393,6 +396,12 @@ export function Layout() {
 
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const auth = useQuery({ queryKey: ['auth-status'], queryFn: api.authStatus })
+  const handleLogout = async () => {
+    try { await api.authLogout() } catch { /* 忽略 */ }
+    qc.clear()
+    navigate('/login', { replace: true })
+  }
   const version = versionData?.version
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   // 自选实时模式限制提示: 可手动关闭, 不持久化 (刷新后恢复显示)
@@ -875,6 +884,39 @@ export function Layout() {
         )}
 
         <div className={cn('border-t border-border py-3 shrink-0', navCollapsed ? 'px-2 flex flex-col items-center gap-1' : 'px-2')}>
+          {/* 当前用户 + 退出 */}
+          {auth.data?.authenticated && (
+            <div className={cn('mb-1 flex items-center', navCollapsed ? 'justify-center' : 'gap-1')}>
+              <div
+                className={cn('flex items-center text-xs text-muted', navCollapsed ? 'justify-center px-0 py-1' : 'flex-1 gap-2 px-3 py-1')}
+                title={auth.data.username}
+              >
+                <UserRound className="h-3.5 w-3.5 shrink-0" />
+                {!navCollapsed && <span className="truncate">{auth.data.username}</span>}
+              </div>
+              <button
+                onClick={handleLogout}
+                title="退出登录"
+                className="rounded-btn p-2 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          {auth.data?.is_admin && !navCollapsed && (
+            <NavLink
+              to="/users"
+              className={({ isActive }) =>
+                cn(
+                  'group relative flex items-center gap-3 rounded-btn px-3 py-2 text-sm transition-all duration-150 ease-smooth',
+                  isActive ? 'bg-elevated text-foreground font-medium' : 'text-foreground/75 hover:bg-elevated/70 hover:text-foreground',
+                )
+              }
+            >
+              <Users className="h-4 w-4 shrink-0 text-foreground/60 group-hover:text-foreground/85" />
+              <span>用户管理</span>
+            </NavLink>
+          )}
           <div className={navCollapsed ? 'flex flex-col items-center gap-1' : 'flex items-center gap-1'}>
             <ThemeToggle />
             <NavLink

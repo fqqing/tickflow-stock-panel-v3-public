@@ -20,6 +20,7 @@ import { cn } from '@/lib/cn'
 
 export function Auth() {
   const navigate = useNavigate()
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')  // 仅设密码时用
   const [showPwd, setShowPwd] = useState(false)
@@ -43,7 +44,7 @@ export function Auth() {
       if (isSetup) {
         return api.authSetup(password)
       }
-      return api.authLogin(password)
+      return api.authLogin(username, password)
     },
     onSuccess: () => {
       // 成功: 跳回原页面(或首页)
@@ -112,6 +113,19 @@ export function Auth() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
+            {/* 用户名(仅登录模式) */}
+            {!isSetup && (
+              <input
+                type="text"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                placeholder="用户名"
+                autoComplete="username"
+                autoFocus
+                className="h-10 w-full rounded-btn border border-border bg-base px-3 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+              />
+            )}
+
             {/* 密码输入 */}
             <div className="relative">
               <input
@@ -119,7 +133,8 @@ export function Auth() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 placeholder="访问密码"
-                autoFocus
+                autoFocus={isSetup}
+                autoComplete="current-password"
                 className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
               />
               <button
@@ -153,7 +168,7 @@ export function Auth() {
 
             <button
               type="submit"
-              disabled={submitMut.isPending || !password}
+              disabled={submitMut.isPending || !password || (!isSetup && !username)}
               className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-btn bg-accent text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
             >
               {submitMut.isPending ? (

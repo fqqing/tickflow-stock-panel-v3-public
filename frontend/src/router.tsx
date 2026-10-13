@@ -35,6 +35,7 @@ const Review = lazy(() => import('./pages/Review').then(m => ({ default: m.Revie
 const LimitUpLadder = lazy(() => import('./pages/LimitUpLadder').then(m => ({ default: m.LimitUpLadder })))
 const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.Branding })))
 const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
+const Users = lazy(() => import('./pages/Users').then(m => ({ default: m.Users })))
 const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
 const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
 const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ default: m.AbnormalMoves })))
@@ -70,6 +71,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/signal-catalog',
   '/branding',
   '/settings',
+  '/users',
   '/dev',
   '/settings/keys',
   '/settings/ai',
@@ -153,6 +155,7 @@ export const router = createBrowserRouter([
       { path: 'pulse', element: <Pulse /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
+      { path: 'users', element: <Users /> },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）
       { path: 'dev', element: <Dev /> },
       // 旧路由兼容重定向

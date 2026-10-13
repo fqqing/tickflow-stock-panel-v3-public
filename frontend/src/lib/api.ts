@@ -2099,16 +2099,16 @@ export const api = {
 
   // ===== Auth (访问认证) =====
   authStatus: () =>
-    request<{ configured: boolean; authenticated: boolean }>('/api/auth/status'),
+    request<{ configured: boolean; authenticated: boolean; username?: string; is_admin?: boolean }>('/api/auth/status'),
   authSetup: (password: string) =>
     request<{ ok: boolean }>('/api/auth/setup', {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
-  authLogin: (password: string) =>
-    request<{ ok: boolean }>('/api/auth/login', {
+  authLogin: (username: string, password: string) =>
+    request<{ ok: boolean; username?: string }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }),
   authLogout: () =>
     request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
@@ -2116,6 +2116,31 @@ export const api = {
     request<{ ok: boolean }>('/api/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }),
+
+  // ===== 用户管理 (admin only) =====
+  listUsers: () =>
+    request<{ users: { username: string; is_admin: boolean; created_at: number }[] }>('/api/auth/users'),
+  createUser: (username: string, password: string, is_admin: boolean = false) =>
+    request<{ ok: boolean; user: { username: string; is_admin: boolean } }>('/api/auth/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, is_admin }),
+    }),
+  deleteUser: (username: string) =>
+    request<{ ok: boolean }>(`/api/auth/users/${encodeURIComponent(username)}`, { method: 'DELETE' }),
+  resetUserPassword: (username: string, password: string) =>
+    request<{ ok: boolean }>(`/api/auth/users/${encodeURIComponent(username)}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+
+  // ===== 策略池 (服务端存储, 按用户隔离) =====
+  getStrategyPool: () =>
+    request<{ strategy_pool: string[] }>('/api/settings/preferences/strategy-pool'),
+  saveStrategyPool: (strategy_pool: string[]) =>
+    request<{ strategy_pool: string[] }>('/api/settings/preferences/strategy-pool', {
+      method: 'PUT',
+      body: JSON.stringify({ strategy_pool }),
     }),
 
   settings: () => request<SettingsState>('/api/settings'),
