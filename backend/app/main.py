@@ -420,44 +420,71 @@ _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 
 
-@app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    path = request.url.path
-    # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
-    if not path.startswith("/api/"):
-        return await call_next(request)
-    # 白名单放行(设密码/登录/探活本身不拦)
-    if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
-        return await call_next(request)
+# 纯 ASGI 中间件(而非 BaseHTTPMiddleware)。
+# BaseHTTPMiddleware 用 TaskGroup 包装下游, 当下游端点异常或 SSE 流被客户端中断时,
+# 会把真实异常吞成 RuntimeError("No response returned") 反复刷日志(实测)。
+# 认证只需「判定 + 注入 ContextVar + 放行/回 JSONResponse」, 不改写响应体, 纯 ASGI 更干净,
+# 且不触碰响应流, 自然避开那个 TaskGroup 坑。
+class AuthMiddleware:
+    def __init__(self, app) -> None:
+        self.app = app
 
-    from app.services import auth as auth_service
-    from app.services import user_scope
-    # 情况 1+2: 未设密码
-    if not auth_service.is_configured():
-        # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
-        if auth_api._is_local_network(auth_api._client_ip(request)):
-            return await call_next(request)
-        # 公网 → 拒绝。不裸奔, 也不给公网设密码的机会(防抢占)
-        return JSONResponse(
-            status_code=403,
-            content={
-                "detail": "面板尚未初始化访问密码,请通过 SSH/本机浏览器访问以设置密码",
-                "code": "NOT_INITIALIZED",
-            },
-        )
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-    # 情况 3: 已设密码, 检查会话, 并注入当前用户到 ContextVar(供数据隔离服务读取)
-    token = request.cookies.get(auth_api.COOKIE_NAME)
-    username = auth_service.get_session_user(token) if token else None
-    if not username:
-        # 未登录: 401(前端跳登录页)
-        return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
-    # 注入用户作用域, 请求结束后恢复(避免串用户)
-    scope_token = user_scope.set_current_user(username)
-    try:
-        return await call_next(request)
-    finally:
-        user_scope.reset_current_user(scope_token)
+        # 用 scope 构造轻量 request 只读 headers/client/url, 不消费 body(receive 原样透传下游)
+        request = Request(scope, receive)
+        path = request.url.path
+
+        # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
+        if not path.startswith("/api/"):
+            await self.app(scope, receive, send)
+            return
+        # 白名单放行(设密码/登录/探活本身不拦)
+        if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
+            await self.app(scope, receive, send)
+            return
+
+        from app.services import auth as auth_service
+        from app.services import user_scope
+
+        # 情况 1+2: 未设密码
+        if not auth_service.is_configured():
+            # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
+            if auth_api._is_local_network(auth_api._client_ip(request)):
+                await self.app(scope, receive, send)
+                return
+            # 公网 → 拒绝。不裸奔, 也不给公网设密码的机会(防抢占)
+            response = JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "面板尚未初始化访问密码,请通过 SSH/本机浏览器访问以设置密码",
+                    "code": "NOT_INITIALIZED",
+                },
+            )
+            await response(scope, receive, send)
+            return
+
+        # 情况 3: 已设密码, 检查会话, 并注入当前用户到 ContextVar(供数据隔离服务读取)
+        token = request.cookies.get(auth_api.COOKIE_NAME)
+        username = auth_service.get_session_user(token) if token else None
+        if not username:
+            # 未登录: 401(前端跳登录页)
+            response = JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
+            await response(scope, receive, send)
+            return
+
+        # 注入用户作用域, 请求结束后恢复(避免串用户)
+        scope_token = user_scope.set_current_user(username)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            user_scope.reset_current_user(scope_token)
+
+
+app.add_middleware(AuthMiddleware)
 
 
 # 路由
