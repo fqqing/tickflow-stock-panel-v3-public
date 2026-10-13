@@ -4,6 +4,8 @@ import { Layout } from './components/Layout'
 import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
 import { useSettings } from './lib/useSharedQueries'
+import { useQuery } from '@tanstack/react-query'
+import { api } from './lib/api'
 import { Logo } from './components/Logo'
 import { ExtensionBoundary } from './extensions/ExtensionBoundary'
 import { RouteError } from './components/RouteError'
@@ -113,15 +115,51 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// 认证守卫 —— 已设密码但未登录时立即跳登录页。
+// 之前依赖数据请求 401 + react-query 重试兜底跳转: api.settings 被 retry 3 次
+// (每次间隔递增) 才触发全局 onError 跳 /login, 造成「未登录先看到主界面外壳、
+// 再等 5-9 秒才弹登录页」的假象。这里用 auth-status(白名单, 恒 200) 主动判定,
+// 未登录立即重定向, 不依赖重试。
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const auth = useQuery({ queryKey: ['auth-status'], queryFn: api.authStatus })
+
+  if (auth.isLoading) {
+    return (
+      <div className="min-h-screen bg-base grid place-items-center">
+        <div className="flex flex-col items-center gap-3 text-muted">
+          <Logo size={28} className="text-foreground" />
+          <div className="text-xs">加载中…</div>
+        </div>
+      </div>
+    )
+  }
+
+  // 未设密码(configured=false)：放行，交给 Onboarding/OnboardingGuard 处理首次设置
+  if (auth.data && auth.data.configured === false) {
+    return <>{children}</>
+  }
+
+  // 已设密码但未登录：立即跳登录页(带 redirect 回跳)
+  if (auth.data && auth.data.authenticated === false) {
+    const redirect = encodeURIComponent(window.location.pathname + window.location.search)
+    return <Navigate to={`/login?redirect=${redirect}`} replace />
+  }
+
+  // 已登录：放行
+  return <>{children}</>
+}
+
 export const router = createBrowserRouter([
   { path: '/onboarding', element: <Onboarding /> },
   { path: '/login', element: <Auth /> },
   {
     path: '/',
     element: (
-      <OnboardingGuard>
-        <Layout />
-      </OnboardingGuard>
+      <AuthGuard>
+        <OnboardingGuard>
+          <Layout />
+        </OnboardingGuard>
+      </AuthGuard>
     ),
     // 渲染异常兜底。不给的话 React Router 会用内置错误页整屏替换(只剩堆栈, 无出口)。
     // 放在根路由上, 子路由自动继承。
