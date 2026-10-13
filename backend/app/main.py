@@ -431,6 +431,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     from app.services import auth as auth_service
+    from app.services import user_scope
     # 情况 1+2: 未设密码
     if not auth_service.is_configured():
         # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
@@ -445,12 +446,18 @@ async def auth_middleware(request: Request, call_next):
             },
         )
 
-    # 情况 3: 已设密码, 检查会话
+    # 情况 3: 已设密码, 检查会话, 并注入当前用户到 ContextVar(供数据隔离服务读取)
     token = request.cookies.get(auth_api.COOKIE_NAME)
-    if token and auth_service.is_valid_session(token):
+    username = auth_service.get_session_user(token) if token else None
+    if not username:
+        # 未登录: 401(前端跳登录页)
+        return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
+    # 注入用户作用域, 请求结束后恢复(避免串用户)
+    scope_token = user_scope.set_current_user(username)
+    try:
         return await call_next(request)
-    # 未登录: 401(前端跳登录页)
-    return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
+    finally:
+        user_scope.reset_current_user(scope_token)
 
 
 # 路由

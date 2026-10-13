@@ -64,13 +64,15 @@ _ENTRY_SCHEMA = {
 
 
 def _path() -> Path:
-    p = settings.data_dir / "user_data" / "watchlist.parquet"
+    from app.services import user_scope
+    p = user_scope.user_data_dir() / "watchlist.parquet"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
 def _groups_path() -> Path:
-    p = settings.data_dir / "user_data" / "watchlist_groups.json"
+    from app.services import user_scope
+    p = user_scope.user_data_dir() / "watchlist_groups.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

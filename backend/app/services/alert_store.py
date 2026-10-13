@@ -30,7 +30,9 @@ _write_count = 0
 
 
 def _path(data_dir: Path) -> Path:
-    p = data_dir / "user_data" / "alerts.jsonl"
+    # 告警记录按用户隔离(后台监控引擎触发时 fallback admin); data_dir 参数保留兼容。
+    from app.services import user_scope
+    p = user_scope.user_data_dir() / "alerts.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

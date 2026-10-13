@@ -42,8 +42,8 @@ class JsonReportStore:
         self._lock = threading.Lock()
 
     def _path(self) -> Path:
-        from app.config import settings
-        p = settings.data_dir / "user_data" / self.filename
+        from app.services import user_scope
+        p = user_scope.user_data_dir() / self.filename
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 

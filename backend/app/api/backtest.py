@@ -94,7 +94,8 @@ def last_trades_by_symbol(
     一笔交易拆成两个点(买入 entry_date / 卖出 exit_date), 拆的动作放在前端
     归约层, 这里保持 trades 原样, 便于日后复用做交易明细。
     """
-    path = settings.data_dir / "user_data" / _LAST_TRADES_FILE
+    from app.services import user_scope
+    path = user_scope.user_data_dir() / _LAST_TRADES_FILE
     if not path.exists():
         return {"symbol": symbol, "strategy_id": None, "finished_at": None, "trades": []}
     try:
@@ -465,10 +466,13 @@ import hashlib
 
 class _BacktestJob:
     """单个回测任务的状态, 存模块级供重连使用。"""
-    __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts")
+    __slots__ = ("key", "username", "cancel_event", "progress", "result", "error", "done", "finish_ts")
 
     def __init__(self, key: str):
+        from app.services import user_scope
         self.key = key
+        # 记录发起用户: 回测在后台线程执行, ContextVar 不跨线程, 落盘时据此定位用户目录
+        self.username = user_scope.get_current_user()
         self.cancel_event = threading.Event()
         self.progress: list[dict] = []   # 进度历史 (新连接可回放)
         self.result = None               # 完成后的结果
@@ -497,7 +501,7 @@ _LAST_TRADES_FILE = "last_backtest_trades.json"
 _LAST_TRADES_MAX = 20000
 
 
-def _persist_last_trades(result: object, strategy_id: str | None = None) -> None:
+def _persist_last_trades(result: object, strategy_id: str | None = None, username: str = "admin") -> None:
     """把本次回测的交易记录落盘, 供 K 线图叠加「回测买卖点」。
 
     覆盖写而不是追加: 回测是探索性的(换个参数就重跑), 保留多份会让「图上这些
@@ -537,7 +541,8 @@ def _persist_last_trades(result: object, strategy_id: str | None = None) -> None
         "trades": slim,
     }
     try:
-        out_dir = settings.data_dir / "user_data"
+        from app.services import user_scope
+        out_dir = user_scope.user_data_dir(username)
         out_dir.mkdir(parents=True, exist_ok=True)
         target = out_dir / _LAST_TRADES_FILE
         tmp = out_dir / (_LAST_TRADES_FILE + ".tmp")
@@ -559,7 +564,7 @@ def _finish_job(
         job.done = True
         job.finish_ts = finished_at
     if error is None:
-        _persist_last_trades(result, strategy_id)
+        _persist_last_trades(result, strategy_id, job.username)
 
     def _expire() -> None:
         with _jobs_lock:

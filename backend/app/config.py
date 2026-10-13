@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     # 公网服务器部署时免去 SSH 端口转发设密码的麻烦。写入 auth.json(哈希)后即不再读取。
     auth_password: str = ""
 
+    # Auth — 管理员用户名(单管理员多用户模型)。首次初始化/旧单密码迁移时,
+    # 现有密码归属到该管理员账号名下。可在 .env 用 ADMIN_USERNAME 覆盖。
+    admin_username: str = "admin"
+
     # Data — frozen: exe 同级 data/ 子目录; 非 frozen: 项目根 data/
     # (均可被环境变量 DATA_DIR 覆盖, pydantic-settings 自动注入)
     data_dir: Path = _user_data_root()

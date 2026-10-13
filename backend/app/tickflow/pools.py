@@ -133,8 +133,9 @@ def _fetch_pool(pool_id: PoolId) -> list[str]:
 
 
 def _load_watchlist() -> list[str]:
-    """读取用户自选(由 watchlist service 维护)。"""
-    path = settings.data_dir / "user_data" / "watchlist.parquet"
+    """读取用户自选(由 watchlist service 维护, 按当前用户隔离)。"""
+    from app.services import user_scope
+    path = user_scope.user_data_dir() / "watchlist.parquet"
     if not path.exists():
         return []
     df = pl.read_parquet(path)

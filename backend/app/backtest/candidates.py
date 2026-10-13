@@ -134,7 +134,9 @@ class CandidateValidationError(CandidateStoreError):
 
 class CandidateStore:
     def __init__(self, data_dir: Path) -> None:
-        self.path = Path(data_dir) / "user_data" / "research_candidates.json"
+        # 研究候选按用户隔离; data_dir 参数保留兼容。
+        from app.services import user_scope
+        self.path = user_scope.user_data_dir() / "research_candidates.json"
 
     def list(self) -> list[dict[str, Any]]:
         with _lock:

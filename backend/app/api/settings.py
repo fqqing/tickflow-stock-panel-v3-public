@@ -744,6 +744,25 @@ def update_nav_hidden(req: NavHiddenIn) -> dict:
     return {"nav_hidden": saved}
 
 
+class StrategyPoolIn(BaseModel):
+    strategy_pool: list[str]
+
+
+@router.get("/preferences/strategy-pool")
+def get_strategy_pool() -> dict:
+    """返回当前用户的策略池(服务端存储, 跨浏览器/设备一致)。"""
+    from app.services import preferences
+    return {"strategy_pool": preferences.get_strategy_pool()}
+
+
+@router.put("/preferences/strategy-pool")
+def update_strategy_pool(req: StrategyPoolIn) -> dict:
+    """保存当前用户的策略池。"""
+    from app.services import preferences
+    saved = preferences.set_strategy_pool(req.strategy_pool)
+    return {"strategy_pool": saved}
+
+
 @router.put("/preferences/watchlist-columns")
 def update_watchlist_columns(req: dict) -> dict:
     """保存自选列表列配置。"""

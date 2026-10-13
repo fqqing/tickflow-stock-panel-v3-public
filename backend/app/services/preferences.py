@@ -15,33 +15,33 @@ logger = logging.getLogger(__name__)
 
 # 进程内缓存: 行情轮询线程一轮会调用 8~12 次 getter, 每次读盘+parse 是纯重复;
 # 文件仅在用户改设置时变化, 以 (mtime_ns, size) 签名判断是否重读。
-_cache: dict | None = None
-_cache_sig: tuple[int, int] | None = None
+# 多用户: 按文件路径(含用户名目录)作为缓存键, 各用户互不串扰。
+_cache: dict[str, dict] = {}
+_cache_sig: dict[str, tuple[int, int]] = {}
 
 
 def _path() -> Path:
-    from app.config import settings
-    p = settings.data_dir / "user_data" / "preferences.json"
+    from app.services import user_scope
+    p = user_scope.user_data_dir() / "preferences.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
 def _invalidate_cache() -> None:
-    global _cache, _cache_sig
-    _cache = None
-    _cache_sig = None
+    _cache.clear()
+    _cache_sig.clear()
 
 
 def load() -> dict:
-    """读取 preferences.json (带 mtime 签名缓存)。返回深拷贝, 调用方可自由修改。"""
-    global _cache, _cache_sig
+    """读取当前用户 preferences.json (带 mtime 签名缓存)。返回深拷贝。"""
     p = _path()
+    key = str(p)
     try:
         sig = (p.stat().st_mtime_ns, p.stat().st_size)
     except OSError:
         return {}
-    if _cache is not None and sig == _cache_sig:
-        return copy.deepcopy(_cache)
+    if key in _cache and sig == _cache_sig.get(key):
+        return copy.deepcopy(_cache[key])
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -49,9 +49,9 @@ def load() -> dict:
     except Exception as e:
         logger.warning("preferences.json malformed: %s", e)
         return {}
-    _cache = data
-    _cache_sig = sig
-    return copy.deepcopy(_cache)
+    _cache[key] = data
+    _cache_sig[key] = sig
+    return copy.deepcopy(data)
 
 
 def save(updates: dict) -> dict:
@@ -1030,3 +1030,26 @@ def set_financial_sync_time(table: str, iso_ts: str) -> None:
     times = get_financial_sync_times()
     times[table] = iso_ts
     save({"financial_sync_times": times})
+
+
+# ===== 策略池 (服务端存储, 按用户隔离) =====
+
+def get_strategy_pool() -> list[str]:
+    """返回策略池中的策略 ID 列表(有序)。"""
+    v = load().get("strategy_pool", [])
+    if not isinstance(v, list):
+        return []
+    return [str(x) for x in v if str(x).strip()]
+
+
+def set_strategy_pool(ids: list[str]) -> list[str]:
+    """保存策略池 ID 列表(去重、保序、过滤空值)。"""
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for x in ids or []:
+        x = str(x).strip()
+        if x and x not in seen:
+            seen.add(x)
+            cleaned.append(x)
+    save({"strategy_pool": cleaned})
+    return cleaned
