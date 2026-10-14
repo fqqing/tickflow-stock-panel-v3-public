@@ -167,18 +167,22 @@ def scan_recent_integrity(
     *,
     today: date | None = None,
     lookback_days: int = SCAN_WINDOW_DAYS,
+    tables: Iterable[str] | None = None,
 ) -> list[IntegrityIssue]:
     """扫描最近交易日的数据完整性, 返回坏分区列表 (按日期升序)。
 
     每族表独立判定; 族内"最近无任何活动"(最新分区早于窗口)时整族跳过 —
     覆盖首次启动(无数据)与长期停用(用户自主)两类不应自动修复的场景。
+    tables: 限定参与检测的表族 (None=全部 _DAILY_TABLES)。用于实时行情门禁
+    只检查「实时 flush 实际会写」的表族, 避免检查用户未开启拉取的表而永久死锁。
     """
     data_dir = Path(data_dir)
     today = today or datetime.now(CN_TZ).date()
     window_start = today - timedelta(days=lookback_days)
     issues: list[IntegrityIssue] = []
+    tables = tuple(tables) if tables is not None else _DAILY_TABLES
 
-    for table in _DAILY_TABLES:
+    for table in tables:
         base = data_dir / table
         existing: set[date] = set()
         if base.exists():
@@ -369,8 +373,16 @@ def boot_integrity_check(app_state) -> None:
     repo = getattr(app_state, "repo", None)
     if repo is None:
         return
+    # 只检查「盘后管道实际会拉取/修复」的表族 — 未开启拉取的表(如 ETF 默认关)
+    # 不会进盘后管道, 检查它们只会反复报坏分区且自动修永远无效。
+    from app.services import preferences as _prefs
+    tables = ["kline_daily"]
+    if _prefs.get_pipeline_pull_index():
+        tables.append("kline_index_daily")
+    if _prefs.get_pipeline_pull_etf():
+        tables.append("kline_etf_daily")
     try:
-        issues = scan_recent_integrity(repo.store.data_dir)
+        issues = scan_recent_integrity(repo.store.data_dir, tables=tables)
     except Exception as e:  # noqa: BLE001
         logger.warning("boot integrity scan failed: %s", e)
         return

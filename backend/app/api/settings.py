@@ -867,12 +867,19 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
         # 历史完整性门禁: 检测到最近交易日的盘中快照/缺口时禁止开启 —
         # 实时 flush 写出"今天"分区后, 盘后管道的"只刷今天"分支会让停机日的
         # 半日快照永久留存。同时自动创建修复任务, 修完即可正常开启。
+        # 只检查「实时 flush 实际会写」的表族: 未开启拉取的表(如 ETF 默认关)
+        # 不会被实时 flush, 检查它们只会因「盘后也不拉」而永久死锁。
         from app.services import data_integrity
 
         repo = getattr(request.app.state, "repo", None)
         if repo is not None:
+            tables = ["kline_daily"]  # 股票实时始终 flush
+            if preferences.get_realtime_pull_etf():
+                tables.append("kline_etf_daily")
+            if preferences.get_realtime_pull_index():
+                tables.append("kline_index_daily")
             try:
-                issues = data_integrity.scan_recent_integrity(repo.store.data_dir)
+                issues = data_integrity.scan_recent_integrity(repo.store.data_dir, tables=tables)
             except Exception:  # noqa: BLE001
                 issues = []
             earliest = data_integrity.earliest_issue_day(issues)
