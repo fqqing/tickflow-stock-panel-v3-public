@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 _STRONG_HIT_PCT = 0.02   # 强命中: 持有期收益 ≥ +2%
 _STOP_LOSS_PCT = -0.03   # 止损: 持有期收益 ≤ -3%
 
+#: 次新股阈值: 上市不满 N 个自然日即剔除(默认 60 天 ≈ 覆盖新股无涨跌幅限制
+#: + 连续一字板阶段, 且技术指标/缠论结构缺足够历史数据)。
+_NEW_LISTING_DAYS = 60
+
 #: picks.parquet 列顺序(固定, 保证空表时 schema 稳定)
 _PICK_COLUMNS = [
     "pick_date", "settle_date", "symbol", "name", "rank",
@@ -52,6 +56,22 @@ def _is_bad_name(name: str | None) -> bool:
         return False
     up = str(name).upper()
     return "ST" in up or "退" in up
+
+
+def _to_date(v) -> date | None:
+    """把 str / date / datetime 统一转成 date; 无法解析返回 None。"""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    if isinstance(v, str):
+        try:
+            return datetime.strptime(v.strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    return None
 class DailyPicksService:
     """每日精选选股 + 纸面命中率结算。"""
 
@@ -112,10 +132,18 @@ class DailyPicksService:
             return []
 
     # ── 选股 ──────────────────────────────────────────────────
-    def run(self, as_of: date | None = None, top_n: int = 5, hold_days: int = 1, push_lark: bool = True) -> list[dict]:
+    def run(
+        self,
+        as_of: date | None = None,
+        top_n: int = 5,
+        hold_days: int = 1,
+        push_lark: bool = True,
+        min_listing_days: int = _NEW_LISTING_DAYS,
+    ) -> list[dict]:
         """跑全量策略 → 聚合共振 → 过滤 → 取 Top N → 落盘。返回本次精选明细。
 
         push_lark=True 时, 落盘后顺带推送到飞书多维表格(失败不阻断选股主流程)。
+        min_listing_days: 次新股过滤阈值(自然日), 上市不满该天数的股票剔除; <=0 关闭。
         """
         from app.services.screener import ScreenerService
         from app.strategy import config as strategy_config
@@ -133,7 +161,7 @@ class DailyPicksService:
             logger.warning("daily_picks: %s enriched 为空, 跳过", as_of)
             return []
 
-        # 2) 候选池过滤: 停牌 / ST退市 / 跌停 / 一字涨停(买不进)
+        # 2) 候选池过滤: 停牌 / ST退市 / 跌停 / 一字涨停(买不进) / 次新股
         mask = pl.col("close").is_not_null() & (pl.col("close") > 0)
         if "name" in df.columns:
             bad = pl.col("name").fill_null("").str.contains("(?i)ST|退")
@@ -149,6 +177,10 @@ class DailyPicksService:
                 & (pl.col("low") == pl.col("close"))
             )
             mask = mask & ~one_word
+        if min_listing_days and min_listing_days > 0:
+            new_syms = self._new_listing_symbols(as_of, min_listing_days)
+            if new_syms:
+                mask = mask & ~pl.col("symbol").is_in(new_syms)
         candidates = df.filter(mask)
         if candidates.is_empty():
             logger.info("daily_picks: %s 过滤后候选池为空", as_of)
@@ -259,6 +291,32 @@ class DailyPicksService:
             except Exception as e:  # noqa: BLE001
                 logger.warning("daily_picks: 飞书推送失败(不阻断选股主流程): %s", e)
         return rows
+
+    def _new_listing_symbols(self, as_of: date, min_listing_days: int) -> set[str]:
+        """返回「上市不满 min_listing_days 自然日」的 A 股 symbol 集合。
+
+        上市日期取自 instruments.parquet 的 listing_date; 缺失的(仅退市股)放行,
+        由 ST/退 过滤兜底。
+        """
+        try:
+            inst = self.repo.get_instruments()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("daily_picks 读取 instruments 失败, 跳过次新过滤: %s", e)
+            return set()
+        if inst.is_empty() or "listing_date" not in inst.columns or "symbol" not in inst.columns:
+            return set()
+        out: set[str] = set()
+        for r in inst.iter_rows(named=True):
+            sym = r.get("symbol")
+            ld = r.get("listing_date")
+            if not sym or ld is None:
+                continue
+            d = _to_date(ld)
+            if d is None:
+                continue
+            if (as_of - d).days < min_listing_days:
+                out.add(str(sym))
+        return out
 
     def _settle_date_after(self, pick_date: str, hold_days: int) -> str | None:
         dates = self._trading_dates()
