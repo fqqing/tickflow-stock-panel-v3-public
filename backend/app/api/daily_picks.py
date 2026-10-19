@@ -1,0 +1,64 @@
+"""每日精选 API — 选股触发 + 今日/历史/命中率查询。"""
+from __future__ import annotations
+
+import logging
+from datetime import date
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
+
+from app.services.daily_picks import DailyPicksService
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/daily-picks", tags=["daily-picks"])
+
+
+class RunRequest(BaseModel):
+    top_n: int = 5
+    hold_days: int = 1
+    as_of: Optional[date] = None
+
+
+def _svc(request: Request) -> DailyPicksService:
+    svc = getattr(request.app.state, "daily_picks_service", None)
+    if svc is None:
+        raise HTTPException(status_code=503, detail="每日精选服务未初始化")
+    return svc
+
+
+@router.post("/run")
+def run_picks(req: RunRequest, request: Request):
+    """手动触发一次选股(盘后管道已定时调用, 这里供调试/补跑)。"""
+    svc = _svc(request)
+    rows = svc.run(as_of=req.as_of, top_n=req.top_n, hold_days=req.hold_days)
+    return {
+        "pick_date": rows[0]["pick_date"] if rows else None,
+        "picks": rows,
+        "total": len(rows),
+    }
+
+
+@router.get("/today")
+def today(request: Request):
+    """最新一期精选(先结算到期条目)。"""
+    svc = _svc(request)
+    svc.settle_pending()
+    return svc.today()
+
+
+@router.get("/history")
+def history(request: Request, limit: int = Query(200, ge=1, le=1000)):
+    """历史精选(含命中标记), 按日期降序。"""
+    svc = _svc(request)
+    svc.settle_pending()
+    return {"picks": svc.history(limit=limit)}
+
+
+@router.get("/stats")
+def stats(request: Request):
+    """命中率统计。"""
+    svc = _svc(request)
+    svc.settle_pending()
+    return svc.stats()

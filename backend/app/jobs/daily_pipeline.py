@@ -1295,6 +1295,36 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
+    # 盘后精选: 管道落盘(enriched 刷新)后再跑策略选股, 晚于管道 10 分钟避免抢资源。
+    pick_hour = sched["hour"]
+    pick_minute = sched["minute"] + 10
+    if pick_minute >= 60:
+        pick_minute -= 60
+        pick_hour += 1
+
+    def _daily_picks_job():
+        app_state = _get_app_state()
+        svc = getattr(app_state, "daily_picks_service", None)
+        if svc is None:
+            logger.warning("daily_picks job skipped: service 未初始化")
+            return {"picks": 0}
+        try:
+            rows = svc.run()
+            return {"picks": len(rows)}
+        except Exception as e:  # noqa: BLE001
+            logger.exception("daily_picks job failed: %s", e)
+            raise
+
+    scheduler.add_job(
+        lambda: _run_tracked(_daily_picks_job, "daily_picks"),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=pick_hour, minute=pick_minute,
+                            timezone="Asia/Shanghai"),
+        id="daily_picks",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
     # 盘后: 五档盘口 sealed 定版(时间由偏好决定, 默认15:02, 范围15:01~18:00)
     depth_sched = preferences.get_depth_finalize_time()
 

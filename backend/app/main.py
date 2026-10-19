@@ -20,6 +20,7 @@ from app.api import (
     backtest,
     chan,
     data,
+    daily_picks,
     depth,
     news,
     ext_data,
@@ -331,6 +332,10 @@ async def _application_lifespan(app: FastAPI):
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service
 
+    # 每日精选(纸面跟踪): 复用已初始化的策略引擎, 盘后定时/手动触发选股。
+    from app.services.daily_picks import DailyPicksService
+    app.state.daily_picks_service = DailyPicksService(repo, strategy_engine)
+
     # 源码内二次开发启动钩子: 仅暴露稳定只读上下文, 单个扩展失败不影响核心启动。
     extension_registry = app.state.extension_registry
     start_backend_extensions(
@@ -520,6 +525,7 @@ app.include_router(chan.router)
 app.include_router(signallab.router)
 app.include_router(lark.router)
 app.include_router(pulse.router)
+app.include_router(daily_picks.router)
 
 # 二次开发路由与小粒度策略在所有核心路由后注册, 禁止覆盖核心路径。
 extension_registry, extension_load_errors = configure_backend_extensions(app)
