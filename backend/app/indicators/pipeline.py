@@ -1141,7 +1141,9 @@ def load_benchmark_momentum(data_dir: Path) -> pl.DataFrame | None:
 def _bench_exchange_expr() -> pl.Expr:
     """symbol 后缀 → 交易所 (SH/SZ/BJ), 无法识别时 null。"""
     return (
-        pl.col("symbol").str.slice(-2).str.to_uppercase().replace(
+        # replace_strict: polars 2.0 移除了 replace 的 default 参数,
+        # strict 版 1.x/2.x 双兼容, 语义一致(未命中 → default=None)。
+        pl.col("symbol").str.slice(-2).str.to_uppercase().replace_strict(
             {ex: ex for ex in _BENCHMARK_PREFERENCE},
             default=None,
             return_dtype=pl.Utf8,
