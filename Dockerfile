@@ -5,9 +5,9 @@
 ARG USE_CN_MIRROR=1
 ARG INCLUDE_STOCKSDK=0
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
-# 备用 PyPI 源:主源同步延迟/故障时自动兜底(阿里云与清华互为补充)
-ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
+ARG PYPI_INDEX=https://mirrors.aliyun.com/pypi/simple
+# 备用 PyPI 源:主源同步延迟/故障时自动兜底(阿里云与腾讯云互为补充)
+ARG PYPI_FALLBACK=https://mirrors.cloud.tencent.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG CODEX_CLI_VERSION=0.144.3
 
@@ -65,8 +65,8 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY";
 # === Stage 2: Python 运行时 ===
 FROM python:3.11-slim AS runtime
 ARG USE_CN_MIRROR=1
-ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
+ARG PYPI_INDEX=https://mirrors.aliyun.com/pypi/simple
+ARG PYPI_FALLBACK=https://mirrors.cloud.tencent.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG INCLUDE_STOCKSDK=0
 WORKDIR /app
@@ -75,9 +75,15 @@ WORKDIR /app
 # Codex CLI 从官方 npm 包提取原生二进制，不依赖运行时 Node.js。
 # bookworm 自带 nodejs 18.19, 满足插件 engines>=18; --no-install-recommends 精简,
 # 自带 libnode/libc-ares 等全部动态依赖, 无需手动补库。
-# 国内构建走 apt mirror 已在 debian 镜像sources.list 配好, 无需额外换源。
+# 国内构建: 把 deb.debian.org 换成腾讯云内网镜像, 否则 debian 官方源在国内极慢/超时。
 # tesseract-ocr: 自选截图导入（始终安装）; nodejs: 仅 INCLUDE_STOCKSDK=1 时安装
-RUN apt-get update \
+RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
+      sed -i 's|http://deb.debian.org|http://mirrors.tencentyun.com|g; s|https://deb.debian.org|http://mirrors.tencentyun.com|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+      sed -i 's|http://deb.debian.org|http://mirrors.tencentyun.com|g; s|https://deb.debian.org|http://mirrors.tencentyun.com|g' \
+        /etc/apt/sources.list 2>/dev/null || true; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
     && if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
          apt-get install -y --no-install-recommends nodejs \
@@ -101,22 +107,21 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # Backend deps
 COPY README.md /README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
-# uv 原生支持同时挂多个 index(主源 + 备用源),会自动在两源中查找,
-# 比逐个重试更稳健 —— 任一源缺包时另一源补位。
+COPY backend/app ./app
+# 用 pip 装依赖(替代 uv sync: uv 在 buildkit 容器内会 futex 死锁挂起)。
+# pip 走主源 + 备用源; 项目为扁平依赖, pip install . 即装齐 dependencies。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
-      export UV_DEFAULT_INDEX="$PYPI_INDEX" UV_EXTRA_INDEX_URL="$PYPI_FALLBACK"; \
+      PIP_ARGS="-i $PYPI_INDEX --extra-index-url $PYPI_FALLBACK"; \
+    else \
+      PIP_ARGS=""; \
     fi; \
-    set -- --no-dev; \
-    for extra in $BACKEND_EXTRAS; do \
-      set -- "$@" --extra "$extra"; \
-    done; \
-    uv sync --frozen "$@" || uv sync "$@"
+    pip install --no-cache-dir $PIP_ARGS .
 
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
 # 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
-COPY backend/app ./app
+# (backend/app 已在上方 COPY, 此处无需重复)
 # stock-sdk 插件依赖: 从 stocksdk-builder 拷入。
 # INCLUDE_STOCKSDK=0(默认) 时, stocksdk-builder 产出空目录,此处拷入空目录,
 # 即最终镜像不含 stock-sdk 依赖,插件默认不可用。
@@ -140,4 +145,4 @@ ENV PYTHONPATH=/app
 # 此处让日志时间戳等其余 naive 时间也对齐北京时间。
 ENV TZ=Asia/Shanghai
 EXPOSE 3018
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]
