@@ -6,6 +6,7 @@
  * A 股语义色: 红涨绿跌(正收益红, 负收益绿)。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import { Target, Loader2, TrendingUp, Crosshair, CalendarDays, Sparkles } from 'lucide-react'
@@ -256,8 +257,12 @@ export function DailyPicks() {
                 {histRows.map(r => (
                   <tr key={`${r.pick_date}-${r.symbol}`} className="border-t border-border/60">
                     <td className="py-2 pr-3 font-mono text-muted">{r.pick_date}</td>
-                    <td className="py-2 pr-3 font-mono text-foreground">{r.symbol}</td>
-                    <td className="py-2 pr-3 text-foreground">{r.name ?? '—'}</td>
+                    <td className="py-2 pr-3 font-mono text-foreground">
+                      <Link to={`/stock/${encodeURIComponent(r.symbol)}`} className="hover:text-accent">{r.symbol}</Link>
+                    </td>
+                    <td className="py-2 pr-3 text-foreground">
+                      <Link to={`/stock/${encodeURIComponent(r.symbol)}`} className="hover:text-accent">{r.name ?? '—'}</Link>
+                    </td>
                     <td className="py-2 pr-3 tabular-nums text-foreground">{r.signal_count}</td>
                     <td className="py-2 pr-3 text-right tabular-nums text-foreground">{fmtPrice(r.entry_close)}</td>
                     <td className="py-2 pr-3 text-right tabular-nums text-foreground">{fmtPrice(r.exit_close)}</td>
@@ -281,12 +286,16 @@ function PickCard({ p }: { p: DailyPickRow }) {
     try { return JSON.parse(p.strategy_hits ?? '[]') as string[] } catch { return [] }
   }, [p.strategy_hits])
   return (
-    <div className="rounded-md border border-border bg-base/60 p-3">
+    <Link
+      to={`/stock/${encodeURIComponent(p.symbol)}`}
+      className="group rounded-md border border-border bg-base/60 p-3 transition-colors hover:border-accent/50 hover:bg-elevated/40"
+      title={`查看 ${p.symbol} ${p.name ?? ''} K 线`}
+    >
       <div className="flex items-center gap-2">
         <span className="flex h-5 w-5 items-center justify-center rounded bg-accent/15 text-[11px] font-semibold text-accent">
           {p.rank}
         </span>
-        <span className="font-mono text-sm font-medium text-foreground">{p.symbol}</span>
+        <span className="font-mono text-sm font-medium text-foreground group-hover:text-accent">{p.symbol}</span>
         <span className="text-xs text-foreground/80">{p.name}</span>
         <span className="ml-auto text-[10px] text-muted">共振 {p.signal_count}</span>
       </div>
@@ -308,7 +317,7 @@ function PickCard({ p }: { p: DailyPickRow }) {
           {hits.length > 4 && <span className="text-[10px] text-muted">+{hits.length - 4}</span>}
         </div>
       )}
-    </div>
+    </Link>
   )
 }
 
