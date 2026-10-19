@@ -19,7 +19,7 @@ import json
 import logging
 import math
 from bisect import bisect_right
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
@@ -319,14 +319,29 @@ class DailyPicksService:
         return out
 
     def _settle_date_after(self, pick_date: str, hold_days: int) -> str | None:
+        """预估结算日 = pick_date 之后第 hold_days 个交易日(仅作快照展示)。
+
+        优先用数据里已存在的交易日序列(精确); 若结算日落在未来(数据尚未生成),
+        用「自然日 + 跳过周末」粗推 —— 节假日误差由 settle_pending 的动态结算兜底,
+        快照里的 settle_date 不参与实际结算判定。
+        """
         dates = self._trading_dates()
-        if not dates:
+        if dates:
+            pos = bisect_right(dates, pick_date)
+            idx = pos + hold_days - 1
+            if idx < len(dates):
+                return dates[idx]
+        # 未来日期: 自然日 + 跳过周末粗推
+        try:
+            d = date.fromisoformat(pick_date)
+        except ValueError:
             return None
-        pos = bisect_right(dates, pick_date)
-        idx = pos + hold_days - 1
-        if idx < len(dates):
-            return dates[idx]
-        return None
+        remaining = hold_days
+        while remaining > 0:
+            d = d + timedelta(days=1)
+            if d.weekday() < 5:  # 周一~周五视为交易日
+                remaining -= 1
+        return d.isoformat()
 
     # ── 飞书推送 ──────────────────────────────────────────────
     def _strategy_labels(self, strategy_hits: str | None) -> list[str]:
@@ -434,22 +449,34 @@ class DailyPicksService:
 
     # ── 结算 ──────────────────────────────────────────────────
     def settle_pending(self, as_of: date | None = None) -> int:
-        """对到期且未结算的 pick 结算收益。返回本次结算条数。"""
+        """对已到期且未结算的 pick 结算收益。返回本次结算条数。
+
+        到期判定不依赖快照里的 settle_date, 而是按「pick_date 之后是否已积累
+        hold_days 个交易日」动态判断 —— 节假日/未来日期自动跳过, 更健壮。
+        """
         df = self._load()
         if df.is_empty() or "exit_close" not in df.columns:
             return 0
-        pending = df.filter(pl.col("exit_close").is_null() & pl.col("settle_date").is_not_null())
+        pending = df.filter(pl.col("exit_close").is_null())
         if pending.is_empty():
             return 0
 
         today = (as_of or date.today()).isoformat()
-        dates = self._trading_dates()
-        settled = 0
+        dates = self._trading_dates()  # 升序
+        if not dates:
+            return 0
         updates: dict[str, dict] = {}
         for r in pending.iter_rows(named=True):
-            settle_date = str(r["settle_date"])
-            if settle_date > today:  # 尚未到期
-                continue
+            pick_date = str(r["pick_date"])
+            hold_days = int(r.get("hold_days") or 1)
+            # pick_date 之后第 hold_days 个交易日
+            pos = bisect_right(dates, pick_date)
+            idx = pos + hold_days - 1
+            if idx >= len(dates):
+                continue  # 数据尚未积累到结算日
+            settle_date = dates[idx]
+            if settle_date > today:
+                continue  # 结算日未到
             exit_close = self._close_on(settle_date, str(r["symbol"]))
             if exit_close is None:
                 continue
@@ -461,10 +488,12 @@ class DailyPicksService:
                 hit = pnl_pct > 0
             updates[str(r["symbol"]) + "|" + str(r["pick_date"])] = {
                 "exit_close": exit_close, "pnl_pct": pnl_pct, "hit": hit,
+                "settle_date": settle_date,
             }
         if not updates:
             return 0
 
+        settled = 0
         for key, patch in updates.items():
             sym, pick_date = key.split("|", 1)
             mask = (pl.col("symbol") == sym) & (pl.col("pick_date") == pick_date)
@@ -472,6 +501,7 @@ class DailyPicksService:
                 pl.when(mask).then(pl.lit(patch["exit_close"])).otherwise(pl.col("exit_close")).alias("exit_close"),
                 pl.when(mask).then(pl.lit(patch["pnl_pct"])).otherwise(pl.col("pnl_pct")).alias("pnl_pct"),
                 pl.when(mask).then(pl.lit(patch["hit"])).otherwise(pl.col("hit")).alias("hit"),
+                pl.when(mask).then(pl.lit(patch["settle_date"])).otherwise(pl.col("settle_date")).alias("settle_date"),
             ])
             settled += 1
         self._save(df)
