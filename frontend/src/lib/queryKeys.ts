@@ -140,6 +140,11 @@ export const QK = {
   regimeCoverage:       ['regime-coverage'] as const,
   regimePhases:         (start?: string, end?: string) => ['regime-phases', start ?? '', end ?? ''] as const,
   regimeMainline:       (kind: string, start?: string, end?: string) => ['regime-mainline', kind, start ?? '', end ?? ''] as const,
+
+  // 每日精选(纸面跟踪)
+  dailyPicksToday:      ['daily-picks-today'] as const,
+  dailyPicksHistory:    (limit: number) => ['daily-picks-history', limit] as const,
+  dailyPicksStats:      ['daily-picks-stats'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

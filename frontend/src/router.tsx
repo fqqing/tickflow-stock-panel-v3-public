@@ -44,6 +44,7 @@ const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ de
 const SignalLab = lazy(() => import('./pages/SignalLab').then(m => ({ default: m.SignalLab })))
 const SignalCatalog = lazy(() => import('./pages/SignalCatalog').then(m => ({ default: m.SignalCatalog })))
 const Pulse = lazy(() => import('./pages/Pulse').then(m => ({ default: m.Pulse })))
+const DailyPicks = lazy(() => import('./pages/DailyPicks').then(m => ({ default: m.DailyPicks })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
 const CORE_ROUTE_PATHS = new Set([
@@ -75,6 +76,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/settings',
   '/users',
   '/dev',
+  '/daily-picks',
   '/settings/keys',
   '/settings/ai',
   '/settings/queries',
@@ -191,6 +193,7 @@ export const router = createBrowserRouter([
       { path: 'signal-lab', element: <SignalLab /> },
       { path: 'signal-catalog', element: <SignalCatalog /> },
       { path: 'pulse', element: <Pulse /> },
+      { path: 'daily-picks', element: <DailyPicks /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
       { path: 'users', element: <Users /> },

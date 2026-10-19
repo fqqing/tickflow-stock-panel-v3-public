@@ -4065,6 +4065,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(params),
     }),
+
+  // ===== 每日精选(纸面跟踪) =====
+  dailyPicksToday: () => request<DailyPicksToday>('/api/daily-picks/today'),
+  dailyPicksHistory: (limit = 200) =>
+    request<{ picks: DailyPickRow[] }>(`/api/daily-picks/history?limit=${limit}`),
+  dailyPicksStats: () => request<DailyPicksStats>('/api/daily-picks/stats'),
+  dailyPicksRun: (params: { top_n?: number; hold_days?: number; as_of?: string }) =>
+    request<{ pick_date: string | null; picks: DailyPickRow[]; total: number }>('/api/daily-picks/run', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
 }
 
 // ===== Pipeline =====
@@ -4587,4 +4598,40 @@ export interface PulsePriceDist {
   buy_volume: number
   sell_volume: number
   neutral_volume: number
+}
+
+// ===== 每日精选(纸面跟踪) =====
+export interface DailyPickRow {
+  pick_date: string
+  settle_date: string | null
+  symbol: string
+  name: string | null
+  rank: number
+  signal_count: number
+  score: number | null
+  strategy_hits: string | null
+  entry_close: number | null
+  exit_close: number | null
+  pnl_pct: number | null
+  hit: boolean | null
+  hold_days: number
+  created_at: string
+}
+
+export interface DailyPicksToday {
+  pick_date: string | null
+  picks: DailyPickRow[]
+}
+
+export interface DailyPicksStats {
+  total: number
+  wins: number
+  strong_hits: number
+  stop_losses: number
+  hit_rate: number | null
+  avg_pnl_pct: number | null
+  median_pnl_pct: number | null
+  best_pnl_pct: number | null
+  worst_pnl_pct: number | null
+  pending: number
 }
