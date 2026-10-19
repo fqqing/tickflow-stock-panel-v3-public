@@ -108,6 +108,10 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 COPY README.md /README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
 COPY backend/app ./app
+COPY backend/chanlab ./chanlab
+# chanlab/bootstrap.py 在容器平铺布局下会把 vendor 定位到 /vendor/chan_py
+# (BACKEND_ROOT=/app, 其 parent=/), 故 vendor 须落在容器根 /vendor 下。
+COPY vendor/chan_py /vendor/chan_py
 # 用 pip 装依赖(替代 uv sync: uv 在 buildkit 容器内会 futex 死锁挂起)。
 # pip 走主源 + 备用源; 项目为扁平依赖, pip install . 即装齐 dependencies。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
