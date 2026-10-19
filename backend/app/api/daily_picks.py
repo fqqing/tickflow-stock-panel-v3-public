@@ -62,3 +62,14 @@ def stats(request: Request):
     svc = _svc(request)
     svc.settle_pending()
     return svc.stats()
+
+
+@router.post("/push")
+def push_to_lark(request: Request):
+    """手动把最新一期精选推送到飞书, 并回写已结算条目的命中信息。"""
+    svc = _svc(request)
+    svc.settle_pending()
+    latest = svc.today()
+    push_res = svc.push_rows_to_lark(latest["picks"])
+    sync_res = svc.sync_settlement_to_lark()
+    return {"push": push_res, "sync": sync_res}

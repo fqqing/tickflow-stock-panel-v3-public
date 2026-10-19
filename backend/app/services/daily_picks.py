@@ -39,6 +39,12 @@ _PICK_COLUMNS = [
     "hold_days", "created_at",
 ]
 
+#: 飞书多维表格「每日精选」(lark-cli base +base-create 建立, 字段见 _to_lark_records)
+LARK_BASE_TOKEN = "WsO0bkz53aNLBqsgYNPcYXY7n1c"
+LARK_TABLE_ID = "tblQyGsbRzBWoZCp"
+#: 飞书表日期字段(写盘转毫秒时间戳 / 结算回写转 "YYYY-MM-DD HH:MM")
+_LARK_DATE_FIELDS = ("选股日期", "结算日期")
+
 
 def _is_bad_name(name: str | None) -> bool:
     """ST / *ST / 退市整理股(名字含 ST 或 退)。"""
@@ -106,8 +112,11 @@ class DailyPicksService:
             return []
 
     # ── 选股 ──────────────────────────────────────────────────
-    def run(self, as_of: date | None = None, top_n: int = 5, hold_days: int = 1) -> list[dict]:
-        """跑全量策略 → 聚合共振 → 过滤 → 取 Top N → 落盘。返回本次精选明细。"""
+    def run(self, as_of: date | None = None, top_n: int = 5, hold_days: int = 1, push_lark: bool = True) -> list[dict]:
+        """跑全量策略 → 聚合共振 → 过滤 → 取 Top N → 落盘。返回本次精选明细。
+
+        push_lark=True 时, 落盘后顺带推送到飞书多维表格(失败不阻断选股主流程)。
+        """
         from app.services.screener import ScreenerService
         from app.strategy import config as strategy_config
 
@@ -242,6 +251,13 @@ class DailyPicksService:
         self._save(merged)
 
         logger.info("daily_picks: %s 选出 %d 只 (top_n=%d, hold=%d)", as_of, len(rows), top_n, hold_days)
+        if push_lark and rows:
+            try:
+                push_res = self.push_rows_to_lark(rows)
+                logger.info("daily_picks: 飞书推送 pushed=%d skipped=%d err=%s",
+                            push_res.get("pushed"), push_res.get("skipped"), push_res.get("error"))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("daily_picks: 飞书推送失败(不阻断选股主流程): %s", e)
         return rows
 
     def _settle_date_after(self, pick_date: str, hold_days: int) -> str | None:
@@ -253,6 +269,110 @@ class DailyPicksService:
         if idx < len(dates):
             return dates[idx]
         return None
+
+    # ── 飞书推送 ──────────────────────────────────────────────
+    def _strategy_labels(self, strategy_hits: str | None) -> list[str]:
+        """strategy_hits(json 列表) -> 中文策略名列表。"""
+        try:
+            ids = json.loads(strategy_hits or "[]")
+        except ValueError:
+            return []
+        labels: list[str] = []
+        for sid in ids:
+            try:
+                labels.append(str(self.engine.get(sid).meta.get("name") or sid))
+            except Exception:
+                labels.append(str(sid))
+        return labels
+
+    def _to_lark_records(self, rows: list[dict]) -> list[dict]:
+        """picks 行 -> 飞书表记录(字段名对齐; pnl_pct×100; hit 转 是/否)。"""
+        out: list[dict] = []
+        for r in rows:
+            pnl = r.get("pnl_pct")
+            hit = r.get("hit")
+            out.append({
+                "代码": str(r.get("symbol") or "").split(".")[0],
+                "名称": str(r.get("name") or ""),
+                "选股日期": r.get("pick_date"),
+                "排名": r.get("rank"),
+                "共振策略数": r.get("signal_count"),
+                "评分": r.get("score"),
+                "买入参考价": r.get("entry_close"),
+                "触发策略": "、".join(self._strategy_labels(r.get("strategy_hits"))) or None,
+                "结算日期": r.get("settle_date"),
+                "结算价": r.get("exit_close"),
+                "持有收益%": round(float(pnl) * 100, 2) if pnl is not None else None,
+                "命中": ("是" if hit is True else "否" if hit is False else None),
+            })
+        return out
+
+    def push_rows_to_lark(self, rows: list[dict]) -> dict:
+        """把精选行推送到飞书表(按 代码+选股日期 去重)。返回结果摘要。"""
+        from app.services import lark_bitable as lb
+
+        if not LARK_BASE_TOKEN or not LARK_TABLE_ID:
+            return {"ok": False, "pushed": 0, "skipped": 0, "error": "飞书表未配置"}
+        if not rows:
+            return {"ok": True, "pushed": 0, "skipped": 0, "error": None}
+        result = lb.push_records(
+            LARK_BASE_TOKEN, LARK_TABLE_ID, self._to_lark_records(rows),
+            key_fields=("代码", "选股日期"),
+            date_fields=_LARK_DATE_FIELDS,
+        )
+        return {
+            "ok": result.ok, "pushed": result.pushed, "skipped": result.skipped,
+            "error": result.error, "details": result.details,
+        }
+
+    def sync_settlement_to_lark(self) -> dict:
+        """把已结算 pick 的 结算价/持有收益%/命中/结算日期 回写到飞书表。"""
+        from app.services import lark_bitable as lb
+
+        if not LARK_BASE_TOKEN or not LARK_TABLE_ID:
+            return {"ok": False, "synced": 0, "error": "飞书表未配置"}
+        df = self._load()
+        if df.is_empty() or "pnl_pct" not in df.columns:
+            return {"ok": True, "synced": 0, "error": None}
+        settled = df.filter(pl.col("pnl_pct").is_not_null())
+        if settled.is_empty():
+            return {"ok": True, "synced": 0, "error": None}
+
+        rows = lb.list_records(LARK_BASE_TOKEN, LARK_TABLE_ID, ["代码", "选股日期"])
+        if rows is None:
+            return {"ok": False, "synced": 0, "error": "读取飞书表失败"}
+        rid_by_key: dict[tuple[str, str], str] = {}
+        for rec in rows:
+            rid = rec.get("record_id")
+            code = str(rec.get("代码") or "").strip()
+            d = str(rec.get("选股日期") or "")[:10]
+            if rid and code:
+                rid_by_key[(code, d)] = rid
+
+        synced = 0
+        errors: list[str] = []
+        for r in settled.iter_rows(named=True):
+            code = str(r.get("symbol") or "").split(".")[0]
+            d = str(r.get("pick_date") or "")[:10]
+            rid = rid_by_key.get((code, d))
+            if not rid:
+                continue
+            pnl = r.get("pnl_pct")
+            hit = r.get("hit")
+            fields = {
+                "结算价": r.get("exit_close"),
+                "持有收益%": round(float(pnl) * 100, 2) if pnl is not None else None,
+                "命中": ("是" if hit is True else "否" if hit is False else None),
+                "结算日期": str(r.get("settle_date") or "")[:10],
+            }
+            res = lb.upsert_record(
+                LARK_BASE_TOKEN, LARK_TABLE_ID, rid, fields, date_fields=("结算日期",),
+            )
+            if res.ok:
+                synced += 1
+            else:
+                errors.append(res.error or "未知错误")
+        return {"ok": True, "synced": synced, "error": "; ".join(errors) if errors else None}
 
     # ── 结算 ──────────────────────────────────────────────────
     def settle_pending(self, as_of: date | None = None) -> int:
@@ -298,6 +418,13 @@ class DailyPicksService:
             settled += 1
         self._save(df)
         logger.info("daily_picks: 结算 %d 条", settled)
+        if settled:
+            try:
+                sync_res = self.sync_settlement_to_lark()
+                logger.info("daily_picks: 结算回写飞书 synced=%d err=%s",
+                            sync_res.get("synced"), sync_res.get("error"))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("daily_picks: 结算回写飞书失败(不阻断主流程): %s", e)
         return settled
 
     def _close_on(self, d: str, symbol: str) -> float | None:

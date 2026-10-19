@@ -427,3 +427,48 @@ def delete_records(base_token: str, table_id: str, record_ids: list[str]) -> Pus
     if proc.returncode != 0:
         return PushResult(ok=False, error=(proc.stderr or proc.stdout or "").strip()[:300])
     return PushResult(ok=True, pushed=len(record_ids))
+
+
+def upsert_record(
+    base_token: str,
+    table_id: str,
+    record_id: str,
+    fields: dict[str, Any],
+    date_fields: tuple[str, ...] | list[str] = (),
+) -> PushResult:
+    """按 record_id 更新(或创建)单条记录 — 结算回写用。
+
+    与 push_records 走 ``+record-batch-create`` 不同, 这里走 ``+record-upsert``:
+    - record_id 给定时更新该记录;
+    - datetime 字段的 CellValue 用 ``"YYYY-MM-DD HH:MM"`` 字符串(而非 batch-create 的毫秒时间戳);
+    - ``fields`` 中值为 None 的键会被丢弃(不写), 避免清空飞书已有值。
+    """
+    payload = dict(fields)
+    for k in date_fields:
+        v = payload.get(k)
+        if v:
+            payload[k] = f"{str(v)[:10]} 00:00"
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    args = [
+        "base", "+record-upsert",
+        "--base-token", base_token, "--table-id", table_id,
+        "--record-id", record_id,
+        "--json", json.dumps(payload, ensure_ascii=False),
+        "--as", "user",
+    ]
+    try:
+        proc = _run_cli(args, _WRITE_TIMEOUT)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return PushResult(ok=False, error=f"{type(e).__name__}: {e}")
+    if proc.returncode != 0:
+        return PushResult(ok=False, error=(proc.stderr or proc.stdout or "").strip()[:300])
+    ok = False
+    try:
+        out = json.loads(proc.stdout)
+        ok = bool(out.get("ok"))
+    except ValueError:
+        ok = '"ok": true' in (proc.stdout or "")
+    if ok:
+        return PushResult(ok=True, pushed=1)
+    return PushResult(ok=False, error=(proc.stdout or proc.stderr or "").strip()[:300])
