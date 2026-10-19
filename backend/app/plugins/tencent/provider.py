@@ -149,6 +149,21 @@ _QT_F_AMOUNT_WAN = 37
 _QT_F_TURNOVER = 38
 _QT_F_AMPLITUDE = 43
 
+#: 五档盘口字段下标(价/量), 供 get_depth 解析。
+#: 腾讯定长字段: 买一~买五 价在 9/11/13/15/17, 量在 10/12/14/16/18;
+#: 卖一~卖五 价在 19/21/23/25/27, 量在 20/22/24/26/28。
+_QT_F_BID_P = [9, 11, 13, 15, 17]
+_QT_F_BID_V = [10, 12, 14, 16, 18]
+_QT_F_ASK_P = [19, 21, 23, 25, 27]
+_QT_F_ASK_V = [20, 22, 24, 26, 28]
+#: 盘口面板附加字段(pe/pb/市值/涨停跌停)。
+_QT_F_PE = 39
+_QT_F_FLOAT_MCAP = 44
+_QT_F_MCAP = 45
+_QT_F_PB = 46
+_QT_F_LIMIT_UP = 47
+_QT_F_LIMIT_DOWN = 48
+
 #: 实时快照输出列(与 quote_service 的 realtime record 契约一致)。
 _RT_COLUMNS = [
     "symbol",
@@ -398,6 +413,38 @@ def parse_quote_line(tcode: str, fields: list[str]) -> dict | None:
     }
 
 
+def _parse_depth_record(tcode: str, fields: list[str]) -> dict | None:
+    """qt 快照 -> 盘口 record(基础字段复用 parse_quote_line, 补五档与附加字段)。
+
+    返回结构对齐 api/depth._normalize_depth_row 的输入: bid/ask 为
+    ``[{"price","volume"} x5]`` 列表(量=手, 价=元), 与 stock-sdk FullQuote 一致。
+    """
+    base = parse_quote_line(tcode, fields)
+    if base is None:
+        return None
+
+    def level(p_idx: int, v_idx: int) -> dict:
+        p = _to_float(fields[p_idx]) if len(fields) > p_idx else None
+        v = _to_float(fields[v_idx]) if len(fields) > v_idx else None
+        return {"price": p, "volume": v}
+
+    def _g(i: int) -> float | None:
+        return _to_float(fields[i]) if len(fields) > i else None
+
+    base.update({
+        "bid": [level(p, v) for p, v in zip(_QT_F_BID_P, _QT_F_BID_V)],
+        "ask": [level(p, v) for p, v in zip(_QT_F_ASK_P, _QT_F_ASK_V)],
+        "pe": _g(_QT_F_PE),
+        "pb": _g(_QT_F_PB),
+        "circulating_market_cap": _g(_QT_F_FLOAT_MCAP),
+        "total_market_cap": _g(_QT_F_MCAP),
+        "limit_up": _g(_QT_F_LIMIT_UP),
+        "limit_down": _g(_QT_F_LIMIT_DOWN),
+        "time": (fields[_QT_F_TIME] or "").strip() if len(fields) > _QT_F_TIME else None,
+    })
+    return base
+
+
 def _qt_parse_body(body: str) -> list[dict]:
     """qt 响应体 -> records。形如 v_sh600519="1~贵州茅台~..."; 多条以分号分隔。"""
     out: list[dict] = []
@@ -546,6 +593,40 @@ class TencentMinuteProvider:
         if not syms:
             return []
         return self._qt_fetch(syms)
+
+    def get_depth(self, symbols: list[str]) -> list[dict]:
+        """按码单拉五档盘口。返回行对齐 stock-sdk FullQuote(含 bid/ask 五档)。
+
+        供 /api/depth 在 stock-sdk 不可用时兜底使用。
+        """
+        if not symbols:
+            return []
+        tcodes: list[str] = []
+        for sym in symbols:
+            code = app_to_qt(sym)
+            if code:
+                tcodes.append(code)
+        if not tcodes:
+            return []
+        body = _http_get_text(_QT + ",".join(tcodes))
+        if not body:
+            return []
+        out: list[dict] = []
+        for chunk in body.split(";"):
+            chunk = chunk.strip()
+            if "=" not in chunk:
+                continue
+            key = chunk.split("=", 1)[0].strip()
+            if not key.startswith("v_"):
+                continue
+            payload = chunk.split('"', 2)
+            if len(payload) < 2:
+                continue
+            tcode = key[2:]
+            row = _parse_depth_record(tcode, payload[1].split("~"))
+            if row is not None:
+                out.append(row)
+        return out
 
     # ---- 测试(设置页试拉) ----
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:

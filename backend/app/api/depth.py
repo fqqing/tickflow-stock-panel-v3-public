@@ -16,13 +16,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/depth", tags=["depth"])
 
 
-def _get_stocksdk_provider():
-    """获取 stocksdk provider, 未安装/不可用时返回 None."""
-    try:
-        return custom_loader.get_provider("stocksdk")
-    except Exception as e:
-        logger.debug("stocksdk provider 不可用: %s", e)
-        return None
+def _get_depth_provider():
+    """盘口 provider: 优先 stock-sdk(完整五档), 无则腾讯(qt)兜底。
+
+    stock-sdk 抓取第三方财经网站接口, 存在合规风险且 Docker 默认不打包,
+    故国内部署时通常不可用; 腾讯 qt.gtimg.cn 免费且含五档, 作为兜底。
+    """
+    for name in ("stocksdk", "tencent"):
+        try:
+            return custom_loader.get_provider(name)
+        except Exception as e:
+            logger.debug("%s provider 不可用: %s", name, e)
+    return None
 
 
 def _normalize_depth_row(row: dict) -> dict[str, Any]:
@@ -85,11 +90,11 @@ def get_depth(symbol: str) -> dict:
 
     返回: 最新价, 涨跌, 五档 bid/ask, 委比委差, 换手率, 市值等.
     """
-    provider = _get_stocksdk_provider()
+    provider = _get_depth_provider()
     if provider is None:
         raise HTTPException(
             status_code=503,
-            detail="stock-sdk 插件不可用, 无法获取盘口数据",
+            detail="盘口数据源不可用(需 stock-sdk 或腾讯插件)",
         )
     rows = provider.get_depth([symbol])
     if not rows:
@@ -102,11 +107,11 @@ def get_depth_batch(
     symbols: str = Query(..., description="逗号分隔的股票代码, 如 600519.SH,000001.SZ"),
 ) -> dict:
     """批量查询多只股票五档盘口."""
-    provider = _get_stocksdk_provider()
+    provider = _get_depth_provider()
     if provider is None:
         raise HTTPException(
             status_code=503,
-            detail="stock-sdk 插件不可用, 无法获取盘口数据",
+            detail="盘口数据源不可用(需 stock-sdk 或腾讯插件)",
         )
     syms = [s.strip() for s in symbols.split(",") if s.strip()]
     if not syms:
