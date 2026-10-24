@@ -51,6 +51,7 @@ import {
   Sun,
   Moon,
   X,
+  Menu,
   WifiOff,
   PanelLeftClose,
   PanelLeftOpen,
@@ -122,6 +123,27 @@ function ThemeToggle() {
     >
       {dark ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
     </button>
+  )
+}
+
+/** 移动端顶部横栏 — 汉堡 + Logo + 主题切换(抽屉式导航入口) */
+function MobileTopBar({ onMenuClick }: { onMenuClick: () => void }) {
+  return (
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+      <button
+        onClick={onMenuClick}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-btn text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+        title="打开菜单"
+        aria-label="打开菜单"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+      <Logo size={22} className="shrink-0 drop-shadow-[0_0_8px_rgba(139,92,246,0.4)]" style={{ color: BRAND }} />
+      <span className="truncate text-sm font-bold tracking-tight text-foreground">Tick Stock Panel</span>
+      <div className="ml-auto flex shrink-0 items-center">
+        <ThemeToggle />
+      </div>
+    </header>
   )
 }
 
@@ -342,9 +364,14 @@ export function Layout() {
   // 自选二级菜单展开状态 — 默认当前在自选页时展开
   const [watchlistNavExpanded, setWatchlistNavExpanded] = useState(location.pathname === '/watchlist')
 
-  // 侧边栏收起状态 — 持久化到 localStorage
+  // 移动端断点(<768px): 侧边栏改为抽屉式, 不占用常驻宽度
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+  )
+  // 移动端抽屉开关(汉堡菜单)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  // 侧边栏收起状态(仅桌面端生效) — 持久化到 localStorage
   const [navCollapsed, setNavCollapsed] = useState(() => {
-    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) return true
     try { return localStorage.getItem('tf-nav-collapsed') === '1' } catch { return false }
   })
 
@@ -411,8 +438,12 @@ export function Layout() {
   useEffect(() => {
     const compact = window.matchMedia('(max-width: 767px)')
     const syncSidebarWithViewport = (event: MediaQueryListEvent | MediaQueryList) => {
-      if (event.matches) {
-        setNavCollapsed(true)
+      const mobile = event.matches
+      setIsMobile(mobile)
+      if (mobile) {
+        // 移动端: 抽屉里需要完整导航, 强制展开态; 并复位抽屉开关
+        setNavCollapsed(false)
+        setMobileNavOpen(false)
         return
       }
       try { setNavCollapsed(localStorage.getItem('tf-nav-collapsed') === '1') } catch {}
@@ -421,6 +452,10 @@ export function Layout() {
     compact.addEventListener('change', syncSidebarWithViewport)
     return () => compact.removeEventListener('change', syncSidebarWithViewport)
   }, [])
+
+  // 切页时自动收起移动端抽屉
+  useEffect(() => { setMobileNavOpen(false) }, [location.pathname])
+
   const toggleNavCollapsed = () => {
     setNavCollapsed(prev => {
       const next = !prev
@@ -579,10 +614,27 @@ export function Layout() {
 
   return (
     <div
-      className="h-screen grid bg-base text-foreground overflow-hidden transition-[grid-template-columns] duration-200 ease-smooth"
-      style={{ gridTemplateColumns: navCollapsed ? '3.5rem 1fr' : '14rem 1fr' }}
+      className={cn(
+        'h-screen bg-base text-foreground overflow-hidden',
+        isMobile ? 'flex flex-col' : 'grid transition-[grid-template-columns] duration-200 ease-smooth',
+      )}
+      style={!isMobile ? { gridTemplateColumns: navCollapsed ? '3.5rem 1fr' : '14rem 1fr' } : undefined}
     >
-      <aside className="border-r border-border bg-surface flex flex-col h-full min-h-0 overflow-hidden">
+      {/* 移动端顶部横栏: 汉堡 + Logo(抽屉式导航入口) */}
+      {isMobile && <MobileTopBar onMenuClick={() => setMobileNavOpen(true)} />}
+      {/* 移动端抽屉遮罩 */}
+      {isMobile && mobileNavOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside className={cn(
+        'border-r border-border bg-surface flex flex-col h-full min-h-0 overflow-hidden',
+        isMobile && 'fixed inset-y-0 left-0 z-50 w-64 shadow-2xl transition-transform duration-200 ease-smooth',
+        isMobile && (mobileNavOpen ? 'translate-x-0' : '-translate-x-full'),
+      )}>
         <div className={cn('border-b border-border shrink-0', navCollapsed ? 'px-2 pt-3 pb-2' : 'px-4 pt-4 pb-3')}>
           {/* Brand block — 收起时只显 logo 居中 */}
           <div className={cn('flex', navCollapsed ? 'flex-col items-center gap-2' : 'items-center gap-2')}>
@@ -599,20 +651,30 @@ export function Layout() {
                 Tick Stock Panel
               </div>
             )}
-            {/* 收起/展开 按钮 */}
-            <button
-              onClick={toggleNavCollapsed}
-              className={cn(
-                'flex items-center rounded-btn text-muted hover:text-foreground hover:bg-elevated/60 transition-colors duration-150 ease-smooth',
-                navCollapsed ? 'justify-center p-1.5' : 'ml-auto p-1.5',
-              )}
-              title={navCollapsed ? '展开菜单' : '收起菜单'}
-            >
-              {navCollapsed
-                ? <PanelLeftOpen className="h-3.5 w-3.5 shrink-0" />
-                : <PanelLeftClose className="h-3.5 w-3.5 shrink-0" />
-              }
-            </button>
+            {/* 收起/展开 按钮 — 移动端改为关闭抽屉 */}
+            {isMobile ? (
+              <button
+                onClick={() => setMobileNavOpen(false)}
+                className="ml-auto flex items-center rounded-btn p-1.5 text-muted hover:text-foreground hover:bg-elevated/60 transition-colors duration-150 ease-smooth"
+                title="关闭菜单"
+              >
+                <X className="h-4 w-4 shrink-0" />
+              </button>
+            ) : (
+              <button
+                onClick={toggleNavCollapsed}
+                className={cn(
+                  'flex items-center rounded-btn text-muted hover:text-foreground hover:bg-elevated/60 transition-colors duration-150 ease-smooth',
+                  navCollapsed ? 'justify-center p-1.5' : 'ml-auto p-1.5',
+                )}
+                title={navCollapsed ? '展开菜单' : '收起菜单'}
+              >
+                {navCollapsed
+                  ? <PanelLeftOpen className="h-3.5 w-3.5 shrink-0" />
+                  : <PanelLeftClose className="h-3.5 w-3.5 shrink-0" />
+                }
+              </button>
+            )}
           </div>
 
           {/* 状态卡 — 收起时隐藏 */}
@@ -960,7 +1022,7 @@ export function Layout() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="h-full overflow-auto scrollbar-gutter-stable"
+        className={cn('overflow-auto scrollbar-gutter-stable', isMobile ? 'min-h-0 flex-1' : 'h-full')}
       >
         {streamStatus === 'reconnecting' && (
           <div
