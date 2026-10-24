@@ -69,7 +69,7 @@ function RangeBar({
     onChange({ start: iso(s), end: iso(end) })
   }
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 [&_button]:whitespace-nowrap">
       {PRESETS.map(p => {
         const s = new Date()
         s.setMonth(s.getMonth() - p.months)
@@ -456,7 +456,7 @@ export function StockTerminal() {
         )}
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 pb-1.5">
+          <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 pb-1.5 [&_button]:whitespace-nowrap">
             {!railDocked && !railDrawer && (
               <DrawerButton side="left" label="股票" onClick={() => setRailOpen(true)} />
             )}

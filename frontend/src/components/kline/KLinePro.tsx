@@ -1120,7 +1120,7 @@ export function KLinePro({
 
   return (
     <div className={cn('relative flex h-full w-full flex-col', className)}>
-      <div className="flex shrink-0 flex-wrap items-center gap-1 px-1 py-1">
+      <div className="flex shrink-0 flex-wrap items-center gap-1 px-1 py-1 [&_button]:whitespace-nowrap">
         {PERIOD_TABS.map(t => (
           <button
             key={t.key}
