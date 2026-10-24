@@ -4608,10 +4608,17 @@ export interface DailyPickRow {
   name: string | null
   rank: number
   signal_count: number
+  family_count: number | null
   score: number | null
   strategy_hits: string | null
+  family_hits: string | null
   entry_close: number | null
+  entry_date: string | null
+  entry_price: number | null
   exit_close: number | null
+  exit_date: string | null
+  exit_reason: string | null
+  max_high: number | null
   pnl_pct: number | null
   hit: boolean | null
   hold_days: number
@@ -4634,4 +4641,5 @@ export interface DailyPicksStats {
   best_pnl_pct: number | null
   worst_pnl_pct: number | null
   pending: number
+  skipped: number
 }

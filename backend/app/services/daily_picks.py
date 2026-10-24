@@ -29,18 +29,91 @@ logger = logging.getLogger(__name__)
 
 #: 命中分层阈值(小数, 与 change_pct 约定一致: 0.02 = 2%)
 _STRONG_HIT_PCT = 0.02   # 强命中: 持有期收益 ≥ +2%
-_STOP_LOSS_PCT = -0.03   # 止损: 持有期收益 ≤ -3%
+_STATS_STOP_PCT = -0.03  # 统计「止损只数」阈值: 持有期收益 ≤ -3%
 
 #: 次新股阈值: 上市不满 N 个自然日即剔除(默认 60 天 ≈ 覆盖新股无涨跌幅限制
 #: + 连续一字板阶段, 且技术指标/缠论结构缺足够历史数据)。
 _NEW_LISTING_DAYS = 60
 
+# ── 策略家族映射: 把同质策略归入同一家族, 共振打分时按家族去重 ──
+# 27 个内置策略里「涨停强度」一个因子就有 6 个变体(断板反包/连板股/连板接力/
+# 逼近涨停/强势高开/启动), 若直接按命中策略数共振, 该类票会虚高。按家族去重后
+# 以「跨家族共振数 family_count」作为主排序, 更接近真实独立信号数量。
+STRATEGY_FAMILIES: dict[str, str] = {
+    # 涨停强势(同一「涨停强度」因子)
+    "broken_board_recovery": "limit_up",
+    "consecutive_limit_ups": "limit_up",
+    "limit_up_momentum": "limit_up",
+    "near_limit_up": "limit_up",
+    "strong_open": "limit_up",
+    "startup_surge": "limit_up",
+    # 趋势突破
+    "boll_breakout": "trend",
+    "bullish_alignment": "trend",
+    "trend_breakout": "trend",
+    "trend_dragon": "trend",
+    "upward_trend_breakout": "trend",
+    # 均线金叉
+    "ma_golden_cross": "ma_cross",
+    "macd_golden": "ma_cross",
+    # 超跌反转
+    "bottom_structure": "reversal",
+    "n_day_low_reversal": "reversal",
+    "oversold_bounce": "reversal",
+    "oversold_reversal": "reversal",
+    "stale_nine_turn": "reversal",
+    # 缠论
+    "chan_3buy_entry": "chan",
+    "chan_structure": "chan",
+    # 量价资金
+    "high_turnover_surge": "volume",
+    "volume_price_surge": "volume",
+    "low_volatility_leader": "volume",
+    # 回踩支撑
+    "pullback_ma20_bounce": "pullback",
+    "pullback_to_support": "pullback",
+}
+
+#: 家族中文名(展示用)
+FAMILY_LABELS: dict[str, str] = {
+    "limit_up": "涨停强势", "trend": "趋势突破", "ma_cross": "均线金叉",
+    "reversal": "超跌反转", "chan": "缠论", "volume": "量价资金",
+    "pullback": "回踩支撑", "other": "其他",
+}
+
+# ── 信号驱动卖出 + 智能买入 参数(首版默认值, 后续可接入偏好配置) ──
+_HARD_STOP_PCT = -0.08        # 硬止损: 持仓期盘中 low ≤ entry×(1+此值) 平仓
+_TRAIL_ACTIVATE_PCT = 0.06    # 移动止盈激活: 最高价 ≥ entry×(1+此值) 后启用
+_TRAIL_DRAWDOWN_PCT = -0.05   # 移动止盈回撤: 激活后从最高价回撤此幅度平仓
+_MAX_HOLD_DAYS = 10           # 最大持仓交易日, 到期按收盘价平仓
+_MARKET_DROP_SKIP_PCT = -0.02 # 买入日大盘(上证)跌幅 ≤ 此值 → 放弃买入
+_GAP_HIGH_SKIP_PCT = 0.05     # 买入日个股高开 ≥ 此值 → 追高放弃
+_GAP_LOW_SKIP_PCT = -0.03     # 买入日个股低开 ≤ 此值 → 信号失效放弃
+_SH_INDEX_SYMBOL = "000001.SH"  # 大盘强弱判断用上证指数
+
+#: exit_reason → 中文标签(前端/飞书展示)
+_EXIT_REASON_LABELS: dict[str, str] = {
+    "stop_loss": "止损", "trailing": "移动止盈", "max_hold": "到期平仓",
+    "skip_market": "大盘弱势", "skip_gap_high": "高开追高", "skip_gap_low": "低开失效",
+}
+
+#: 空表 schema(字段 → polars 类型), 保证读空文件/首次落盘时类型稳定
+_SCHEMA: dict[str, "pl.DataType"] = {
+    "pick_date": pl.Utf8, "settle_date": pl.Utf8, "symbol": pl.Utf8, "name": pl.Utf8,
+    "rank": pl.Int64, "signal_count": pl.Int64, "family_count": pl.Int64,
+    "score": pl.Float64, "strategy_hits": pl.Utf8, "family_hits": pl.Utf8,
+    "entry_close": pl.Float64, "entry_date": pl.Utf8, "entry_price": pl.Float64,
+    "exit_close": pl.Float64, "exit_date": pl.Utf8, "exit_reason": pl.Utf8, "max_high": pl.Float64,
+    "pnl_pct": pl.Float64, "hit": pl.Boolean, "hold_days": pl.Int64, "created_at": pl.Utf8,
+}
+
 #: picks.parquet 列顺序(固定, 保证空表时 schema 稳定)
 _PICK_COLUMNS = [
     "pick_date", "settle_date", "symbol", "name", "rank",
-    "signal_count", "score", "strategy_hits",
-    "entry_close", "exit_close", "pnl_pct", "hit",
-    "hold_days", "created_at",
+    "signal_count", "family_count", "score", "strategy_hits", "family_hits",
+    "entry_close", "entry_date", "entry_price",
+    "exit_close", "exit_date", "exit_reason", "max_high",
+    "pnl_pct", "hit", "hold_days", "created_at",
 ]
 
 #: 飞书多维表格「每日精选」(lark-cli base +base-create 建立, 字段见 _to_lark_records)
@@ -81,35 +154,41 @@ class DailyPicksService:
         self.data_dir = repo.store.data_dir
         self.picks_path = self.data_dir / "daily_picks" / "picks.parquet"
         self._enriched_dir = self.data_dir / enriched_dirname("stock", "cn")
+        self._index_dir = self.data_dir / "kline_index_daily"
 
     # ── 存储读写 ──────────────────────────────────────────────
     def _load(self) -> pl.DataFrame:
         if not self.picks_path.exists():
-            return pl.DataFrame(schema={
-                "pick_date": pl.Utf8, "settle_date": pl.Utf8, "symbol": pl.Utf8, "name": pl.Utf8,
-                "rank": pl.Int64, "signal_count": pl.Int64, "score": pl.Float64, "strategy_hits": pl.Utf8,
-                "entry_close": pl.Float64, "exit_close": pl.Float64, "pnl_pct": pl.Float64, "hit": pl.Boolean,
-                "hold_days": pl.Int64, "created_at": pl.Utf8,
-            })
+            return pl.DataFrame(schema=_SCHEMA)
         try:
             df = pl.read_parquet(self.picks_path)
         except Exception as e:  # noqa: BLE001
             logger.warning("daily_picks 读取失败: %s", e)
-            return pl.DataFrame()
+            return pl.DataFrame(schema=_SCHEMA)
+        # 补全新字段(老数据迁移 / 空表), 缺省 None
+        df = self._ensure_columns(df)
         if df.is_empty():
             return df
         # 规范化类型(parquet 读回后数值列可能被推断为其它类型)
         casts = []
-        for col in ("rank", "signal_count", "hold_days"):
+        for col in ("rank", "signal_count", "family_count", "hold_days"):
             if col in df.columns:
                 casts.append(pl.col(col).cast(pl.Int64))
-        for col in ("score", "entry_close", "exit_close", "pnl_pct"):
+        for col in ("score", "entry_close", "entry_price", "exit_close", "pnl_pct", "max_high"):
             if col in df.columns:
                 casts.append(pl.col(col).cast(pl.Float64))
         if casts:
             df = df.with_columns(casts)
         if "hit" in df.columns:
             df = df.with_columns(pl.col("hit").cast(pl.Boolean))
+        return df
+
+    @staticmethod
+    def _ensure_columns(df: pl.DataFrame) -> pl.DataFrame:
+        """补全新字段列(老数据迁移 / 空表), 缺省 None。"""
+        for col, dtype in _SCHEMA.items():
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None).cast(dtype).alias(col))
         return df
 
     def _save(self, df: pl.DataFrame) -> None:
@@ -212,15 +291,16 @@ class DailyPicksService:
             context, params_map=params_map, overrides_map=overrides_map, strategy_ids=all_ids,
         )
 
-        # 4) 聚合多策略共振命中
+        # 4) 聚合多策略共振命中(按家族去重)
         agg: dict[str, dict] = {}
         for sid, result in engine_results.items():
             for row in result.rows:
                 sym = str(row.get("symbol") or "")
                 if not sym or sym not in name_map:
                     continue
-                entry = agg.setdefault(sym, {"hits": [], "best_score": None})
+                entry = agg.setdefault(sym, {"hits": [], "families": set(), "best_score": None})
                 entry["hits"].append(sid)
+                entry["families"].add(STRATEGY_FAMILIES.get(sid, "other"))
                 s = row.get("score")
                 if s is not None:
                     try:
@@ -233,10 +313,14 @@ class DailyPicksService:
             logger.info("daily_picks: %s 无策略命中", as_of)
             return []
 
-        # 5) 排序: 共振数降序 → 最高分降序
+        # 5) 排序: 家族数降序 → 共振数降序 → 最高分降序
         ranked = sorted(
             agg.items(),
-            key=lambda kv: (-len(kv[1]["hits"]), -(kv[1]["best_score"] or 0.0)),
+            key=lambda kv: (
+                -len(kv[1]["families"]),
+                -len(kv[1]["hits"]),
+                -(kv[1]["best_score"] or 0.0),
+            ),
         )
         picks = ranked[: max(1, min(top_n, len(ranked)))]
 
@@ -257,10 +341,17 @@ class DailyPicksService:
                 "name": name_map.get(sym),
                 "rank": i,
                 "signal_count": len(info["hits"]),
+                "family_count": len(info["families"]),
                 "score": info["best_score"],
                 "strategy_hits": json.dumps(info["hits"], ensure_ascii=False),
+                "family_hits": json.dumps(sorted(info["families"]), ensure_ascii=False),
                 "entry_close": None,  # 由下方从 enriched 回填
+                "entry_date": None,
+                "entry_price": None,
                 "exit_close": None,
+                "exit_date": None,
+                "exit_reason": None,
+                "max_high": None,
                 "pnl_pct": None,
                 "hit": None,
                 "hold_days": hold_days,
@@ -271,12 +362,7 @@ class DailyPicksService:
         for r in rows:
             r["entry_close"] = close_map.get(r["symbol"])
 
-        new_df = pl.DataFrame(rows, schema={
-            "pick_date": pl.Utf8, "settle_date": pl.Utf8, "symbol": pl.Utf8, "name": pl.Utf8,
-            "rank": pl.Int64, "signal_count": pl.Int64, "score": pl.Float64, "strategy_hits": pl.Utf8,
-            "entry_close": pl.Float64, "exit_close": pl.Float64, "pnl_pct": pl.Float64, "hit": pl.Boolean,
-            "hold_days": pl.Int64, "created_at": pl.Utf8,
-        })
+        new_df = pl.DataFrame(rows, schema=_SCHEMA)
         if new_df.is_empty():
             return []
         merged = pl.concat([existing, new_df], how="vertical") if not existing.is_empty() else new_df
@@ -449,15 +535,19 @@ class DailyPicksService:
 
     # ── 结算 ──────────────────────────────────────────────────
     def settle_pending(self, as_of: date | None = None) -> int:
-        """对已到期且未结算的 pick 结算收益。返回本次结算条数。
+        """结算未完成的 pick —— 智能买入 + 信号驱动卖出。返回本次结算条数。
 
-        到期判定不依赖快照里的 settle_date, 而是按「pick_date 之后是否已积累
-        hold_days 个交易日」动态判断 —— 节假日/未来日期自动跳过, 更健壮。
+        两步走(都挂在一次 settle 调用里, 数据齐了才推进):
+          1) 买入判断: 对尚未买入(entry_price 为空)的 pick, 回看 T+1 的大盘涨跌幅
+             与个股跳空幅度, 决定「按 T+1 开盘价买入」还是「放弃」(skip_*)。
+          2) 卖出扫描: 对已买入的 pick, 从 entry_date 次日逐日扫止损/移动止盈/
+             最大持仓, 谁先触发按谁平仓。
+        放弃买入与已平仓都写入 exit_reason, 二者都不再视为 pending。
         """
         df = self._load()
-        if df.is_empty() or "exit_close" not in df.columns:
+        if df.is_empty() or "exit_reason" not in df.columns:
             return 0
-        pending = df.filter(pl.col("exit_close").is_null())
+        pending = df.filter(pl.col("exit_reason").is_null())
         if pending.is_empty():
             return 0
 
@@ -465,55 +555,189 @@ class DailyPicksService:
         dates = self._trading_dates()  # 升序
         if not dates:
             return 0
+
         updates: dict[str, dict] = {}
         for r in pending.iter_rows(named=True):
+            sym = str(r["symbol"])
             pick_date = str(r["pick_date"])
-            hold_days = int(r.get("hold_days") or 1)
-            # pick_date 之后第 hold_days 个交易日
-            pos = bisect_right(dates, pick_date)
-            idx = pos + hold_days - 1
-            if idx >= len(dates):
-                continue  # 数据尚未积累到结算日
-            settle_date = dates[idx]
-            if settle_date > today:
-                continue  # 结算日未到
-            exit_close = self._close_on(settle_date, str(r["symbol"]))
-            if exit_close is None:
-                continue
-            entry = r.get("entry_close")
-            pnl_pct = None
-            hit = None
-            if entry:
-                pnl_pct = round((exit_close - float(entry)) / float(entry), 6)
-                hit = pnl_pct > 0
-            updates[str(r["symbol"]) + "|" + str(r["pick_date"])] = {
-                "exit_close": exit_close, "pnl_pct": pnl_pct, "hit": hit,
-                "settle_date": settle_date,
+            key = f"{sym}|{pick_date}"
+            entry_price = r.get("entry_price")
+            entry_date = r.get("entry_date")
+
+            # ── 1) 尚未买入 → 买入判断 ──
+            if entry_price is None:
+                info = self._entry_info(pick_date, sym, r.get("entry_close"), dates)
+                if info["exit_reason"]:
+                    # 放弃买入: 记原因, 不再参与胜率
+                    updates[key] = {
+                        "exit_reason": info["exit_reason"],
+                        "exit_date": info["entry_date"],
+                        "max_high": None,
+                    }
+                    continue
+                if info["entry_price"] is None:
+                    continue  # T+1 数据未到, 保持 pending
+                entry_date = info["entry_date"]
+                entry_price = info["entry_price"]
+                updates[key] = {"entry_date": entry_date, "entry_price": entry_price}
+
+            # ── 2) 已买入 → 卖出扫描 ──
+            res = self._scan_exit(sym, entry_date, entry_price, dates, today)
+            if res is None:
+                continue  # 未触发退出, 继续持有
+            pnl = round((res["exit_close"] - entry_price) / entry_price, 6) if entry_price else None
+            updates[key] = {
+                **updates.get(key, {}),
+                "exit_date": res["exit_date"],
+                "exit_close": res["exit_close"],
+                "exit_reason": res["exit_reason"],
+                "max_high": res["max_high"],
+                "pnl_pct": pnl,
+                "hit": (pnl > 0) if pnl is not None else None,
+                "settle_date": res["exit_date"],
             }
+
         if not updates:
             return 0
 
-        settled = 0
         for key, patch in updates.items():
             sym, pick_date = key.split("|", 1)
             mask = (pl.col("symbol") == sym) & (pl.col("pick_date") == pick_date)
-            df = df.with_columns([
-                pl.when(mask).then(pl.lit(patch["exit_close"])).otherwise(pl.col("exit_close")).alias("exit_close"),
-                pl.when(mask).then(pl.lit(patch["pnl_pct"])).otherwise(pl.col("pnl_pct")).alias("pnl_pct"),
-                pl.when(mask).then(pl.lit(patch["hit"])).otherwise(pl.col("hit")).alias("hit"),
-                pl.when(mask).then(pl.lit(patch["settle_date"])).otherwise(pl.col("settle_date")).alias("settle_date"),
-            ])
-            settled += 1
+            exprs = [
+                pl.when(mask).then(pl.lit(val)).otherwise(pl.col(col)).alias(col)
+                for col, val in patch.items()
+            ]
+            df = df.with_columns(exprs)
         self._save(df)
-        logger.info("daily_picks: 结算 %d 条", settled)
-        if settled:
-            try:
-                sync_res = self.sync_settlement_to_lark()
-                logger.info("daily_picks: 结算回写飞书 synced=%d err=%s",
-                            sync_res.get("synced"), sync_res.get("error"))
-            except Exception as e:  # noqa: BLE001
-                logger.warning("daily_picks: 结算回写飞书失败(不阻断主流程): %s", e)
-        return settled
+        logger.info("daily_picks: 结算 %d 条", len(updates))
+        try:
+            sync_res = self.sync_settlement_to_lark()
+            logger.info("daily_picks: 结算回写飞书 synced=%d err=%s",
+                        sync_res.get("synced"), sync_res.get("error"))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("daily_picks: 结算回写飞书失败(不阻断主流程): %s", e)
+        return len(updates)
+
+    def _entry_info(self, pick_date: str, symbol: str, entry_close: float | None, dates: list[str]) -> dict:
+        """智能买入判断。返回 {entry_date, entry_price, exit_reason}。
+
+        - T+1 大盘(上证)跌幅 ≤ 阈值 → 'skip_market' 放弃
+        - 个股 T+1 高开 ≥ 阈值 → 'skip_gap_high' 放弃
+        - 个股 T+1 低开 ≤ 阈值 → 'skip_gap_low' 放弃
+        - 否则 → 按 T+1 开盘价买入(entry_price=open)
+        - T+1 数据未到 / 缺值 → entry_price=None 且 exit_reason=None(保持 pending)
+        """
+        pos = bisect_right(dates, pick_date)
+        if pos >= len(dates):
+            return {"entry_date": None, "entry_price": None, "exit_reason": None}
+        entry_date = dates[pos]  # pick_date 之后第一个交易日 = T+1
+        bar = self._bar_on(entry_date, symbol)
+        if bar is None or bar.get("open") is None or not entry_close or entry_close <= 0:
+            return {"entry_date": None, "entry_price": None, "exit_reason": None}
+        open_price = float(bar["open"])
+        gap = open_price / float(entry_close) - 1
+
+        mkt_chg = self._index_chg_on(entry_date, dates)
+        # 大盘弱势(指数数据缺失时不触发, 放行)
+        if mkt_chg is not None and mkt_chg <= _MARKET_DROP_SKIP_PCT:
+            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_market"}
+        if gap >= _GAP_HIGH_SKIP_PCT:
+            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_gap_high"}
+        if gap <= _GAP_LOW_SKIP_PCT:
+            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_gap_low"}
+        return {"entry_date": entry_date, "entry_price": open_price, "exit_reason": None}
+
+    def _scan_exit(
+        self, symbol: str, entry_date: str, entry_price: float, dates: list[str], today: str,
+    ) -> dict | None:
+        """从 entry_date 次日逐日扫退出条件, 返回首个触发的 {exit_date, exit_close,
+        exit_reason, max_high}; 未触发返回 None。"""
+        start = bisect_right(dates, entry_date)
+        max_high = float(entry_price)
+        activated = False
+        stop_price = entry_price * (1 + _HARD_STOP_PCT)
+        activate_price = entry_price * (1 + _TRAIL_ACTIVATE_PCT)
+        for i in range(start, len(dates)):
+            d = dates[i]
+            if d > today:
+                break
+            bar = self._bar_on(d, symbol)
+            if bar is None:
+                continue  # 停牌/缺数据跳过
+            high = bar.get("high")
+            low = bar.get("low")
+            close = bar.get("close")
+            if high is None or low is None or close is None:
+                continue
+            max_high = max(max_high, float(high))
+            # 1) 硬止损(保守: 用触发价成交, 不假设更好的价格)
+            if float(low) <= stop_price:
+                return {"exit_date": d, "exit_close": round(stop_price, 4),
+                        "exit_reason": "stop_loss", "max_high": max_high}
+            # 2) 移动止盈
+            if max_high >= activate_price:
+                activated = True
+            if activated:
+                trail_price = max_high * (1 + _TRAIL_DRAWDOWN_PCT)
+                if float(low) <= trail_price:
+                    return {"exit_date": d, "exit_close": round(trail_price, 4),
+                            "exit_reason": "trailing", "max_high": max_high}
+            # 3) 最大持仓(第 max_hold 个交易日, 收盘价平)
+            if i - start + 1 >= _MAX_HOLD_DAYS:
+                return {"exit_date": d, "exit_close": float(close),
+                        "exit_reason": "max_hold", "max_high": max_high}
+        return None
+
+    def _bar_on(self, d: str, symbol: str) -> dict | None:
+        """读某交易日单根 K 线(OHLC)。"""
+        part = self._enriched_dir / f"date={d}" / "part.parquet"
+        if not part.exists():
+            return None
+        try:
+            lf = pl.scan_parquet(part)
+            cols = lf.collect_schema().names()
+            need = ("open", "high", "low", "close")
+            if "symbol" not in cols or not all(c in cols for c in need):
+                return None
+            row = lf.filter(pl.col("symbol") == symbol).select(list(need)).collect()
+            if row.is_empty():
+                return None
+            return {c: row[0, c] for c in need}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("daily_picks _bar_on(%s,%s) 失败: %s", d, symbol, e)
+            return None
+
+    def _index_close_on(self, d: str) -> float | None:
+        """读上证指数某交易日收盘价。"""
+        part = self._index_dir / f"date={d}" / "part.parquet"
+        if not part.exists():
+            return None
+        try:
+            lf = pl.scan_parquet(part)
+            cols = lf.collect_schema().names()
+            if "symbol" not in cols or "close" not in cols:
+                return None
+            row = lf.filter(pl.col("symbol") == _SH_INDEX_SYMBOL).select("close").collect()
+            if row.is_empty():
+                return None
+            v = row[0, "close"]
+            return float(v) if v is not None else None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("daily_picks _index_close_on(%s) 失败: %s", d, e)
+            return None
+
+    def _index_chg_on(self, d: str, dates: list[str]) -> float | None:
+        """上证指数在 d 日的涨跌幅(相对前一交易日收盘)。指数数据缺失返回 None。"""
+        today_close = self._index_close_on(d)
+        if today_close is None:
+            return None
+        idx = bisect_right(dates, d) - 1  # d 在 dates 里的下标(若存在)
+        if idx <= 0:
+            return None
+        prev_close = self._index_close_on(dates[idx - 1])
+        if prev_close is None or prev_close <= 0:
+            return None
+        return today_close / prev_close - 1
 
     def _close_on(self, d: str, symbol: str) -> float | None:
         """读某交易日的收盘价(窄读 parquet 分区)。"""
@@ -555,18 +779,21 @@ class DailyPicksService:
         return self._sanitize(df.to_dicts())
 
     def stats(self) -> dict:
-        """命中率统计(仅统计已结算条目)。"""
+        """命中率统计(仅统计已平仓条目; 放弃买入单独计 skipped)。"""
         df = self._load()
         if df.is_empty():
             return self._empty_stats()
         settled = df.filter(pl.col("pnl_pct").is_not_null())
         if settled.is_empty():
-            return self._empty_stats()
+            st = self._empty_stats()
+            st["pending"] = int(df.filter(pl.col("exit_reason").is_null()).height)
+            st["skipped"] = int(df.filter(pl.col("exit_reason").str.starts_with("skip_")).height)
+            return st
         pnl = settled["pnl_pct"].drop_nulls().to_list()
         total = len(settled)
         wins = sum(1 for p in pnl if p > 0)
         strong = sum(1 for p in pnl if p >= _STRONG_HIT_PCT)
-        stops = sum(1 for p in pnl if p <= _STOP_LOSS_PCT)
+        stops = sum(1 for p in pnl if p <= _STATS_STOP_PCT)
         pnl_sorted = sorted(pnl)
         n = len(pnl_sorted)
         median = pnl_sorted[n // 2] if n % 2 else (pnl_sorted[n // 2 - 1] + pnl_sorted[n // 2]) / 2
@@ -581,7 +808,8 @@ class DailyPicksService:
             "median_pnl_pct": round(median, 4),
             "best_pnl_pct": round(pnl_sorted[-1], 4),
             "worst_pnl_pct": round(pnl_sorted[0], 4),
-            "pending": int(df.filter(pl.col("pnl_pct").is_null()).height),
+            "pending": int(df.filter(pl.col("exit_reason").is_null()).height),
+            "skipped": int(df.filter(pl.col("exit_reason").str.starts_with("skip_")).height),
         }
 
     @staticmethod
@@ -589,7 +817,7 @@ class DailyPicksService:
         return {
             "total": 0, "wins": 0, "strong_hits": 0, "stop_losses": 0,
             "hit_rate": None, "avg_pnl_pct": None, "median_pnl_pct": None,
-            "best_pnl_pct": None, "worst_pnl_pct": None, "pending": 0,
+            "best_pnl_pct": None, "worst_pnl_pct": None, "pending": 0, "skipped": 0,
         }
 
     @staticmethod

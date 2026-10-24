@@ -20,6 +20,16 @@ import { cn } from '@/lib/cn'
 const BULL = '#F04438'  // 红涨
 const BEAR = '#12B76A'  // 绿跌
 
+// 后端 exit_reason / family key → 中文标签
+const EXIT_REASON_LABEL: Record<string, string> = {
+  stop_loss: '止损', trailing: '移动止盈', max_hold: '到期平仓',
+  skip_market: '大盘弱势', skip_gap_high: '高开追高', skip_gap_low: '低开失效',
+}
+const FAMILY_LABEL: Record<string, string> = {
+  limit_up: '涨停', trend: '趋势', ma_cross: '金叉', reversal: '反转',
+  chan: '缠论', volume: '量价', pullback: '回踩', other: '其他',
+}
+
 const cardCls = 'rounded-card border border-border bg-surface/80 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm'
 
 function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Target; title: string; hint?: string }) {
@@ -161,7 +171,7 @@ export function DailyPicks() {
         <div className="flex-1">
           <h1 className="text-base font-semibold text-foreground">每日精选</h1>
           <p className="text-[11px] text-muted">
-            盘后跑 27 个策略 → 多策略共振选 Top N → 纸面跟踪命中率（持有 {todayPicks[0]?.hold_days ?? 1} 个交易日结算）
+            盘后跑 27 个策略 → 家族去重共振选 Top N → 信号驱动卖出（止损 -8% / 移动止盈 / 最大持仓 10 日）
           </p>
         </div>
         <button
@@ -196,7 +206,7 @@ export function DailyPicks() {
         <StatCard
           label="待结算"
           value={`${pending}`}
-          sub={pending > 0 ? '到期自动结算' : '无未结算条目'}
+          sub={`${pending > 0 ? '持仓中' : '无未结算条目'} · 已放弃 ${s?.skipped ?? 0}`}
           tone="muted"
         />
       </div>
@@ -246,9 +256,10 @@ export function DailyPicks() {
                   <th className="pb-2 pr-3 font-normal">选股日</th>
                   <th className="pb-2 pr-3 font-normal">代码</th>
                   <th className="pb-2 pr-3 font-normal">名称</th>
-                  <th className="pb-2 pr-3 font-normal">共振</th>
-                  <th className="pb-2 pr-3 font-normal text-right">买入参考</th>
-                  <th className="pb-2 pr-3 font-normal text-right">结算价</th>
+                  <th className="pb-2 pr-3 font-normal">家族/共振</th>
+                  <th className="pb-2 pr-3 font-normal text-right">买入价</th>
+                  <th className="pb-2 pr-3 font-normal text-right">退出价</th>
+                  <th className="pb-2 pr-3 font-normal">退出</th>
                   <th className="pb-2 pr-3 font-normal text-right">收益</th>
                   <th className="pb-2 font-normal">命中</th>
                 </tr>
@@ -263,9 +274,12 @@ export function DailyPicks() {
                     <td className="py-2 pr-3 text-foreground">
                       <Link to={`/stock/${encodeURIComponent(r.symbol)}`} className="hover:text-accent">{r.name ?? '—'}</Link>
                     </td>
-                    <td className="py-2 pr-3 tabular-nums text-foreground">{r.signal_count}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-foreground">{fmtPrice(r.entry_close)}</td>
+                    <td className="py-2 pr-3 tabular-nums text-foreground">
+                      {r.family_count != null ? `${r.family_count}/${r.signal_count}` : r.signal_count}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-foreground">{fmtPrice(r.entry_price ?? r.entry_close)}</td>
                     <td className="py-2 pr-3 text-right tabular-nums text-foreground">{fmtPrice(r.exit_close)}</td>
+                    <td className="py-2 pr-3">{exitReasonBadge(r)}</td>
                     <td className={cn('py-2 pr-3 text-right font-medium tabular-nums', priceColorClass(r.pnl_pct))}>
                       {fmtPct(r.pnl_pct)}
                     </td>
@@ -285,6 +299,9 @@ function PickCard({ p }: { p: DailyPickRow }) {
   const hits = useMemo(() => {
     try { return JSON.parse(p.strategy_hits ?? '[]') as string[] } catch { return [] }
   }, [p.strategy_hits])
+  const families = useMemo(() => {
+    try { return JSON.parse(p.family_hits ?? '[]') as string[] } catch { return [] }
+  }, [p.family_hits])
   return (
     <Link
       to={`/stock/${encodeURIComponent(p.symbol)}`}
@@ -297,11 +314,13 @@ function PickCard({ p }: { p: DailyPickRow }) {
         </span>
         <span className="font-mono text-sm font-medium text-foreground group-hover:text-accent">{p.symbol}</span>
         <span className="text-xs text-foreground/80">{p.name}</span>
-        <span className="ml-auto text-[10px] text-muted">共振 {p.signal_count}</span>
+        <span className="ml-auto text-[10px] text-muted">
+          {p.family_count != null ? `家族 ${p.family_count} · 共振 ${p.signal_count}` : `共振 ${p.signal_count}`}
+        </span>
       </div>
       <div className="mt-2 flex items-baseline justify-between">
-        <span className="text-[11px] text-muted">买入参考（收盘）</span>
-        <span className="text-sm font-medium tabular-nums text-foreground">{fmtPrice(p.entry_close)}</span>
+        <span className="text-[11px] text-muted">{p.entry_price != null ? '买入价（开盘）' : '参考价（收盘）'}</span>
+        <span className="text-sm font-medium tabular-nums text-foreground">{fmtPrice(p.entry_price ?? p.entry_close)}</span>
       </div>
       {p.score != null && (
         <div className="mt-1 flex items-baseline justify-between">
@@ -309,19 +328,45 @@ function PickCard({ p }: { p: DailyPickRow }) {
           <span className="text-sm font-medium tabular-nums text-accent">{p.score.toFixed(1)}</span>
         </div>
       )}
-      {hits.length > 0 && (
+      {p.exit_reason != null && (
+        <div className="mt-1 flex items-center justify-between">
+          <span className="text-[11px] text-muted">状态</span>
+          {exitReasonBadge(p)}
+        </div>
+      )}
+      {families.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {families.map(f => (
+            <span key={f} className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">{FAMILY_LABEL[f] ?? f}</span>
+          ))}
+        </div>
+      ) : hits.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1">
           {hits.slice(0, 4).map(h => (
             <span key={h} className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent">{h}</span>
           ))}
           {hits.length > 4 && <span className="text-[10px] text-muted">+{hits.length - 4}</span>}
         </div>
-      )}
+      ) : null}
     </Link>
   )
 }
 
+function exitReasonBadge(r: DailyPickRow) {
+  if (!r.exit_reason) return <span className="text-[10px] text-muted">—</span>
+  const label = EXIT_REASON_LABEL[r.exit_reason] ?? r.exit_reason
+  const skip = r.exit_reason.startsWith('skip_')
+  return (
+    <span className={cn('rounded px-1.5 py-0.5 text-[10px]', skip ? 'bg-muted/10 text-muted' : 'bg-accent/10 text-accent')}>
+      {label}
+    </span>
+  )
+}
+
 function hitBadge(r: DailyPickRow) {
+  if (r.exit_reason?.startsWith('skip_')) {
+    return <span className="rounded bg-muted/10 px-1.5 py-0.5 text-[10px] text-muted">放弃</span>
+  }
   if (r.pnl_pct == null) {
     return <span className="rounded bg-muted/10 px-1.5 py-0.5 text-[10px] text-muted">待结算</span>
   }
