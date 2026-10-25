@@ -69,6 +69,7 @@ ARG PYPI_INDEX=https://mirrors.aliyun.com/pypi/simple
 ARG PYPI_FALLBACK=https://mirrors.cloud.tencent.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG INCLUDE_STOCKSDK=0
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /app
 
 # Node.js 运行时: 仅在启用 stock-sdk 插件时安装(供 node bridge.mjs 使用)。
@@ -84,13 +85,13 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
-    && if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
-         apt-get install -y --no-install-recommends nodejs \
-         && node --version; \
-       fi \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng nodejs npm \
+    && if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+    && npm install -g @larksuite/cli \
     && rm -rf /var/lib/apt/lists/* \
-    && tesseract --version
+    && tesseract --version \
+    && node --version \
+    && lark-cli --version
 
 # 安装 uv(快) —— 国内镜像下三重兜底:主源 → 备用源 → 官方源,
 # 任一成功即可,避免单一镜像同步延迟/故障导致构建失败。

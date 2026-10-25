@@ -31,4 +31,6 @@ services:
       # 复用主机 Codex 登录态；后端只读后复制到单次请求的临时 CODEX_HOME。
       # Windows PowerShell/CMD 下 HOME 常未设置, 可通过 .env 里 CODEX_HOME_HOST 覆盖。
       - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
+      # lark-cli 凭证持久化(飞书多维表格推送), 重建容器不丢授权 token。
+      - ./lark-cli-data:/root/.lark-cli
     restart: unless-stopped
