@@ -69,7 +69,6 @@ ARG PYPI_INDEX=https://mirrors.aliyun.com/pypi/simple
 ARG PYPI_FALLBACK=https://mirrors.cloud.tencent.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG INCLUDE_STOCKSDK=0
-ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /app
 
 # Node.js 运行时: 仅在启用 stock-sdk 插件时安装(供 node bridge.mjs 使用)。
@@ -85,13 +84,9 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng nodejs npm \
-    && if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY"; fi \
-    && npm install -g @larksuite/cli \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
-    && tesseract --version \
-    && node --version \
-    && lark-cli --version
+    && tesseract --version
 
 # 安装 uv(快) —— 国内镜像下三重兜底:主源 → 备用源 → 官方源,
 # 任一成功即可,避免单一镜像同步延迟/故障导致构建失败。
@@ -113,6 +108,11 @@ COPY backend/chanlab ./chanlab
 # chanlab/bootstrap.py 在容器平铺布局下会把 vendor 定位到 /vendor/chan_py
 # (BACKEND_ROOT=/app, 其 parent=/), 故 vendor 须落在容器根 /vendor 下。
 COPY vendor/chan_py /vendor/chan_py
+# lark-cli 原生二进制(飞书多维表格推送用)。本地预下载后随镜像打包, 避免构建时
+# 从 GitHub/npmmirror 下载(国内构建环境访问 GitHub 会超时失败, 且 @larksuite/cli
+# 的 npm 包 postinstall 依赖网络下载二进制)。原生二进制可直接运行, 无需 node。
+COPY vendor/lark-cli/lark-cli /usr/local/bin/lark-cli
+RUN chmod +x /usr/local/bin/lark-cli
 # 用 pip 装依赖(替代 uv sync: uv 在 buildkit 容器内会 futex 死锁挂起)。
 # pip 走主源 + 备用源; 项目为扁平依赖, pip install . 即装齐 dependencies。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \

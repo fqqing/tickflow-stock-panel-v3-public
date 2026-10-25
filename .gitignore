@@ -125,3 +125,6 @@ docs/kline-lab/terminal-*.png
 
 # 公网访问运维备忘（含访问密码与 frp token，勿入库）
 *运维备忘*.md
+
+# lark-cli 预下载的 Linux 原生二进制 (46MB, 不入库; 部署/重新下载走 npmmirror binary 路径)
+vendor/lark-cli/
