@@ -33,4 +33,6 @@ services:
       - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
       # lark-cli 凭证持久化(飞书多维表格推送), 重建容器不丢授权 token。
       - ./lark-cli-data:/root/.lark-cli
+      # lark-cli 密钥环(App Secret + user token), 落在 ~/.local/share/lark-cli, 必须单独挂载否则重建丢凭证。
+      - ./lark-cli-keychain:/root/.local/share/lark-cli
     restart: unless-stopped
