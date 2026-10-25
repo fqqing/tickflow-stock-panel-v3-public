@@ -1325,6 +1325,39 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
+    # 盘后结算: 对已选出的 pick 做「智能买入 + 信号驱动卖出」, 晚于选股 5 分钟,
+    # 让选股先落盘(它读 enriched 更重), 结算再独立推进之前 pick 的持仓。
+    # 此前结算只挂在 /today、/history、/stats 端点打开时才触发(lazy), 盘后无人
+    # 打开页面时结算永远不推进 —— 加独立定时任务后, 到期持仓会自动平仓并回写飞书。
+    settle_hour = pick_hour
+    settle_minute = pick_minute + 5
+    if settle_minute >= 60:
+        settle_minute -= 60
+        settle_hour += 1
+
+    def _daily_picks_settle_job():
+        app_state = _get_app_state()
+        svc = getattr(app_state, "daily_picks_service", None)
+        if svc is None:
+            logger.warning("daily_picks_settle job skipped: service 未初始化")
+            return {"settled": 0}
+        try:
+            settled = svc.settle_pending()
+            return {"settled": settled}
+        except Exception as e:  # noqa: BLE001
+            logger.exception("daily_picks_settle job failed: %s", e)
+            raise
+
+    scheduler.add_job(
+        lambda: _run_tracked(_daily_picks_settle_job, "daily_picks_settle"),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=settle_hour, minute=settle_minute,
+                            timezone="Asia/Shanghai"),
+        id="daily_picks_settle",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
     # 盘后: 五档盘口 sealed 定版(时间由偏好决定, 默认15:02, 范围15:01~18:00)
     depth_sched = preferences.get_depth_finalize_time()
 
