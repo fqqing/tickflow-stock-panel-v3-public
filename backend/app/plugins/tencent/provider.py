@@ -76,20 +76,27 @@ import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import polars as pl
 
 from app.data_providers.base import AssetType
+from app.data_providers.normalizer import normalize_daily
 from app.market_time import CN_TZ
 
 logger = logging.getLogger(__name__)
 
-_DATASETS = ("minute", "realtime")
+_DATASETS = ("minute", "realtime", "daily")
 
 _HOST = "https://ifzq.gtimg.cn"
 _MKLINE = f"{_HOST}/appstock/app/kline/mkline"
+#: 日 K 端点(不复权)。与 mkline 同 host, 行格式同为 [date, open, close, high, low, volume]。
+_DAILY = f"{_HOST}/appstock/app/kline/kline"
+
+#: 日 K 单次请求上限(根)。实测 count 传多少返回多少(320/800/1200 均按量返回),
+#: 没有 mkline 的 482 根封顶。上限按约 30 年(8000 交易日)设, 覆盖全历史。
+_DAILY_MAX_COUNT = 8000
 
 #: 实时快照端点。与 mkline 不同 host, 但同属腾讯财经。
 _QT = "https://qt.gtimg.cn/q="
@@ -287,6 +294,60 @@ def parse_bars(rows: list[list], symbol: str) -> list[dict]:
                 "volume": vol / vol_div,
                 # 腾讯不给成交额(第 7 位是换手率基点, 不是 amount)。
                 # 用 成交量(手) x 100 x 收盘价 估算, 实测与本地日 K amount 相对差 ~0.06%。
+                "amount": vol / vol_div * 100.0 * close_,
+            }
+        )
+    return out
+
+
+def _fetch_daily_bars(tcode: str, count: int) -> list[list]:
+    """拉单只标的的日 K 原始行(不复权)。count 必须显式传(留空返回 bad params)。"""
+    payload = _http_get(f"{_DAILY}?param={tcode},day,,,{count}")
+    if not payload:
+        return []
+    node = (payload.get("data") or {}).get(tcode) or {}
+    return node.get("day") or []
+
+
+def _parse_daily_bars(rows: list[list], symbol: str) -> list[dict]:
+    """原始日 K 行 -> 内部 schema(dict 列表)。
+
+    行格式与 mkline 同源, 第 2 位是 close、第 3 位是 high、第 4 位是 low::
+
+        ['2026-10-12', open, close, high, low, volume]
+
+    ⚠️ 量纲与分钟一致: 科创板(688/689)的 volume 单位是「股」, 其余板块是「手」。
+    amount 由 vol x 100 x close 估算(腾讯日 K 同样不直接给成交额)。
+    """
+    vol_div = 100.0 if symbol[:3] in _VOL_IN_SHARES_PREFIXES else 1.0
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            continue
+        date_s = str(row[0] or "").strip()
+        # 日 K 日期形如 2026-10-12(10 位)。
+        if len(date_s) != 10:
+            continue
+        open_ = _to_float(row[1])
+        close_ = _to_float(row[2])
+        high_ = _to_float(row[3])
+        low_ = _to_float(row[4])
+        vol = _to_float(row[5])
+        if close_ is None or vol is None:
+            continue
+        try:
+            d = date.fromisoformat(date_s)
+        except ValueError:
+            continue
+        out.append(
+            {
+                "symbol": symbol,
+                "date": d,
+                "open": open_,
+                "high": high_,
+                "low": low_,
+                "close": close_,
+                "volume": vol / vol_div,
                 "amount": vol / vol_div * 100.0 * close_,
             }
         )
@@ -520,7 +581,7 @@ class _TencentConfig:
     """轻量 config shim, 让 custom loader 的 list_sources/provider_has_dataset 能识别本 provider。"""
 
     name: str = "tencent"
-    display_name: str = "腾讯行情(分钟K)"
+    display_name: str = "腾讯行情(日K+分钟K+实时)"
     datasets: dict = field(default_factory=lambda: dict.fromkeys(_DATASETS))
     path: None = None
     builtin: bool = True
@@ -650,7 +711,88 @@ class TencentMinuteProvider:
                 "columns": list(rows[0].keys()) if rows else [],
                 "preview": rows[:5],
             }
+        if dataset == "daily":
+            probe = symbols or ["600519.SH", "000001.SZ", "688981.SH", "920002.BJ"]
+            df = self.get_daily(probe, datetime.now(), datetime.now())
+            return {
+                "provider": self.name,
+                "dataset": "daily",
+                "rows": df.height,
+                "columns": df.columns,
+                "preview": df.head(5).to_dicts() if not df.is_empty() else [],
+            }
         raise ValueError(f"腾讯行情不支持数据集: {dataset}")
+
+    def get_daily(
+        self,
+        symbols: list[str],
+        start_time: datetime | None,
+        end_time: datetime | None,
+        asset_type: str = "stock",
+        on_chunk_done: Callable[[int, int], None] | None = None,
+    ) -> pl.DataFrame:
+        """拉取日 K(不复权)。
+
+        ``start_time``/``end_time`` 用于估算要拉多少根 bar —— 腾讯日 K 接口
+        ``kline/kline`` 的 count 必须显式传(留空返回 ``bad params``), 但支持任意
+        大 count(实测 1200 根正常, 无 mkline 的 482 根封顶)。这里按请求范围算
+        天数 + 节假日缓冲, 封顶 8000 根(约 30 年全历史)。
+
+        返回经 normalize_daily 规范的 DataFrame(与 tickflow/custom 的 get_daily
+        同 schema): symbol/date/open/high/low/close/volume/amount。不复权口径,
+        与项目内部「raw + adj_factor 分离」一致。
+        """
+        if not symbols:
+            return pl.DataFrame()
+
+        if start_time and end_time:
+            days = max(1, (end_time.date() - start_time.date()).days)
+        else:
+            days = 400
+        count = min(max(days + 60, 60), _DAILY_MAX_COUNT)
+
+        # 日 K 映射用 app_to_qt: 它支持北交所(bj 前缀), 而 mkline 专用 app_to_tencent
+        # 会把 BJ 挑出去走回落。kline/kline 实测支持 bj920xxx 日 K。
+        routed = [(s, app_to_qt(s)) for s in symbols]
+        pairs = [(s, c) for s, c in routed if c]
+        if not pairs:
+            if on_chunk_done:
+                on_chunk_done(1, 1)
+            return pl.DataFrame()
+
+        workers = min(_MAX_WORKERS, max(1, len(pairs)))
+        logger.info(
+            "腾讯日K 拉取开始(%d symbols, count=%d, workers=%d)",
+            len(pairs),
+            count,
+            workers,
+        )
+
+        def one(pair: tuple[str, str]) -> pl.DataFrame:
+            sym, tcode = pair
+            rows = _parse_daily_bars(_fetch_daily_bars(tcode, count), sym)
+            return pl.DataFrame(rows) if rows else pl.DataFrame()
+
+        frames: list[pl.DataFrame] = []
+        t0 = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for df in pool.map(one, pairs):
+                if not df.is_empty():
+                    frames.append(df)
+        got = sum(f.height for f in frames)
+        logger.info(
+            "腾讯日K 拉取完成(%d symbols, %d 行, %.2fs)",
+            len(pairs),
+            got,
+            time.perf_counter() - t0,
+        )
+        if on_chunk_done:
+            on_chunk_done(1, 1)
+
+        if not frames:
+            return pl.DataFrame()
+        df = pl.concat(frames, how="diagonal_relaxed")
+        return normalize_daily(df, source=self.name)
 
     def get_minute(
         self,

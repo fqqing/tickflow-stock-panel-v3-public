@@ -10,10 +10,10 @@
 # runtime: none —— 纯 Python 标准库 urllib + 线程池并发, 无需额外安装。
 
 name: tencent
-display_name: "腾讯行情(分钟K+实时)"
+display_name: "腾讯行情(日K+分钟K+实时)"
 runtime: none
 entry: app.plugins.tencent.provider:TencentMinuteProvider
 check: app.plugins.tencent.provider:availability
-datasets: [minute, realtime]
-description: "腾讯财经两个端点: mkline 分钟K + qt 实时快照。零鉴权、免费。分钟K: 沪深全支持、约 90~160 只/秒, 单次上限约 482 根 bar(m1≈2 交易日), 不支持 beg/end 区间与批量, 北交所无分钟数据(自动回落 stock-sdk)。实时快照: 支持批量(100 只/请求)、覆盖沪深+北交所+ETF+指数, 直接给成交额, 实测 5500 只全市场约 1s。"
-install_hint: "无需安装依赖与 token。分钟K: 选中它作为「分钟数据源」即可(注意单次最多约 482 根 bar, 且不含北交所)。实时行情: 选中它作为「实时行情数据源」—— 选第三方源后不受 TickFlow 档位限制, 全市场实时无需付费 key。实时快照需要本地标的维表来枚举代码, 请先跑一次标的同步。"
+datasets: [minute, realtime, daily]
+description: "腾讯财经三个端点: kline 日K(不复权) + mkline 分钟K + qt 实时快照。零鉴权、免费。日K: 沪深北全支持、支持任意历史深度(count 按需)、第2位close/第3位high/第4位low 需注意、科创板量纲为股。分钟K: 沪深全支持、约 90~160 只/秒, 单次上限约 482 根 bar(m1≈2 交易日), 不支持 beg/end 区间与批量, 北交所无分钟数据(自动回落 stock-sdk)。实时快照: 支持批量(100 只/请求)、覆盖沪深+北交所+ETF+指数, 直接给成交额, 实测 5500 只全市场约 1s。"
+install_hint: "无需安装依赖与 token。日K: 选中它作为「日K数据源」即可(不复权口径, 与除权因子分离; 除权因子暂仍走 TickFlow, 云端无 key 时自动跳过, 历史因子表已覆盖)。分钟K: 选中它作为「分钟数据源」即可(注意单次最多约 482 根 bar, 且不含北交所)。实时行情: 选中它作为「实时行情数据源」—— 选第三方源后不受 TickFlow 档位限制, 全市场实时无需付费 key。实时快照需要本地标的维表来枚举代码, 请先跑一次标的同步。"
