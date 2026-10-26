@@ -1382,6 +1382,62 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
+    # 盘后策略表推送: 5 张策略表(底部结构/向上趋势突破/趋势擒龙/异动预警/启动策略)。
+    # 此前 v1 靠 Windows 计划任务跑 scripts/daily_lark_push.py 每天推; v3 迁到云端
+    # Docker 后没有对应 cron(容器内 scheduler 只注册了 instruments/pipeline/daily_picks
+    # 等), 这些表自 2026-10-08 后停更 —— 每日精选有独立 job 不受影响。这里补上,
+    # 循环所有已配置策略表、幂等去重, 每天盘后自动跑; 前端手动推送(/api/lark/push)保留。
+    # 时间放 settle 之后 5 分钟, 此时 enriched 已落盘且选股/结算已结束, 不抢资源。
+    push_hour = settle_hour
+    push_minute = settle_minute + 5
+    if push_minute >= 60:
+        push_minute -= 60
+        push_hour += 1
+
+    def _strategy_push_job(on_progress: Callable | None = None):
+        emit = on_progress or (lambda *a, **k: None)
+        from app.services import lark_screener
+
+        app_state = _get_app_state()
+        repo = getattr(app_state, "repo", None)
+        engine = getattr(app_state, "strategy_engine", None)
+        quote_service = getattr(app_state, "quote_service", None)
+        if repo is None or engine is None:
+            logger.warning("strategy_push job skipped: repo/engine 未初始化")
+            return {"pushed": 0}
+        data_dir = repo.store.data_dir
+        summary = []
+        for sid, cfg in lark_screener.STRATEGY_TABLES.items():
+            emit("strategy_push", 10, f"推送策略: {cfg['label']}")
+            try:
+                r = lark_screener.run_push(
+                    sid, repo=repo, engine=engine, quote_service=quote_service,
+                    data_dir=data_dir, as_of=None, force=False,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("strategy_push %s 异常: %s", sid, e)
+                r = {"ok": False, "error": str(e), "pushed": 0}
+            summary.append({
+                "id": sid, "label": cfg["label"], "ok": bool(r.get("ok")),
+                "pushed": int(r.get("pushed") or 0), "error": r.get("error"),
+            })
+            logger.info("strategy_push %s(%s): ok=%s pushed=%s skipped=%s err=%s",
+                        sid, cfg["label"], r.get("ok"), r.get("pushed"),
+                        r.get("skipped"), r.get("error"))
+        pushed = sum(s["pushed"] for s in summary)
+        emit("strategy_push", 100, f"策略推送完成: {pushed} 条")
+        return {"pushed": pushed, "summary": summary}
+
+    scheduler.add_job(
+        lambda: _run_tracked(_strategy_push_job, "strategy_push"),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=push_hour, minute=push_minute,
+                            timezone="Asia/Shanghai"),
+        id="strategy_push",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
     # 盘后: 五档盘口 sealed 定版(时间由偏好决定, 默认15:02, 范围15:01~18:00)
     depth_sched = preferences.get_depth_finalize_time()
 
