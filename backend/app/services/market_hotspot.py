@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -881,6 +882,11 @@ async def _llm_reason_for_mainline(member: str, leader_sym: str, name_map: dict,
         return None
 
 
+_REASON_CACHE: dict[str, tuple[float, dict]] = {}
+_REASON_TTL = 300.0
+_REASON_CACHE_MAX = 20
+
+
 async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
                                 use_ai: bool = True) -> dict:
     """主线原因: 同花顺涨停原因(一等) + 东财快讯(二等) 反查每条主线的驱动。
@@ -888,8 +894,10 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
     一等证据 = 同花顺涨停原因池(getharden: 当日涨停股 + reason 题材标签)。主线成分股里
     今日涨停的个股被同花顺收录, 直接给出「涨停 N 家 + 每只涨停原因」, 命中率贴近主线
     定义本身(主线 = 涨停集群)。
-    二等证据 = 东财 7x24 快讯(标题关键词 + boards 板块字段)。
+    二等证据 = 东财 7x24 快讯(标题关键词)。
     叠 LLM 归纳成一句「因 XX 刺激, 龙头 XX 领涨(涨停 N 家)」; AI 未配置/失败降级规则拼接。
+    性能: 全命中后每条主线都会调 LLM, 改为 asyncio.gather 并行 + 5min 结果缓存
+    (指纹 = 日期 + 主线集合 + 涨停池规模), 避免每次请求串行 8 次 LLM。
 
     返回:
       { "date", "reasons": [ {member, score, rank, limit_up_count, max_boards,
@@ -908,15 +916,23 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
     if top.is_empty():
         return {"date": str(latest), "reasons": [], "note": MEMBERSHIP_NOTE}
 
+    # 结果缓存: 主线集合 + 涨停池规模不变(5min 内)直接复用, 免 8 次 LLM 重算
+    harden = _fetch_ths_harden()
+    members_key = ",".join(str(r.get("member") or "") for r in top.to_dicts())
+    fp = hashlib.md5(
+        f"reason:{latest}:{kind}:{members_key}:{len(harden)}".encode("utf-8")
+    ).hexdigest()
+    hit = _REASON_CACHE.get(fp)
+    if hit and time.time() - hit[0] < _REASON_TTL:
+        return hit[1]
+
     name_map = _load_name_map(data_dir)
     map_df, _ = _load_concept_map_df(repo, kind)
-    concept_names: list[str] = (sorted(map_df[kind].unique().to_list(), key=len, reverse=True)
-                                if not map_df.is_empty() else [])
 
     items = _fetch_flash_items(size=200)
-    harden = _fetch_ths_harden()
 
-    reasons: list[dict] = []
+    # 同步收集证据(同花顺一等 + 快讯二等), 再统一并行 LLM
+    entries: list[dict] = []
     for row in top.to_dicts():
         member = str(row.get("member") or "")
         leader_sym = str(row.get("leader_symbol") or "")
@@ -948,32 +964,59 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
         catalysts.sort(key=lambda x: (x["important"], x["share"]), reverse=True)
         catalysts = catalysts[:6]
 
-        reason, source = "", "rule"
-        if use_ai and (ths_hits or catalysts):
-            reason = await _llm_reason_for_mainline(member, leader_sym, name_map,
-                                                    catalysts, ths_hits)
-            if reason:
-                source = "ai"
-        if not reason:
-            reason = _rule_reason_for_mainline(member, leader_sym, name_map,
-                                               catalysts, ths_hits)
-
-        reasons.append({
+        entries.append({
+            "row": row,
             "member": member,
+            "leader_sym": leader_sym,
+            "ths_hits": ths_hits,
+            "catalysts": catalysts,
+        })
+
+    # 并行 LLM: 全命中后 8 条都会调, 串行最坏 8×45s → 并行≈单条耗时
+    llm_results: list[str | None] = [None] * len(entries)
+    if use_ai:
+        tasks = [
+            _llm_reason_for_mainline(e["member"], e["leader_sym"], name_map,
+                                     e["catalysts"], e["ths_hits"])
+            for e in entries
+        ]
+        try:
+            llm_results = list(await asyncio.gather(*tasks))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("LLM 主线原因并行归纳失败, 全部降级规则版: %s", e)
+            llm_results = [None] * len(entries)
+
+    reasons: list[dict] = []
+    for e, ai_reason in zip(entries, llm_results):
+        row = e["row"]
+        leader_sym = e["leader_sym"]
+        reason, source = "", "rule"
+        if ai_reason:
+            reason, source = ai_reason, "ai"
+        if not reason:
+            reason = _rule_reason_for_mainline(e["member"], leader_sym, name_map,
+                                               e["catalysts"], e["ths_hits"])
+        reasons.append({
+            "member": e["member"],
             "score": round(float(row.get("score") or 0.0), 1),
             "rank": int(row.get("rank") or 0),
             "limit_up_count": int(row.get("limit_up_count") or 0),
             "max_boards": int(row.get("max_boards") or 0),
             "leader": {"symbol": leader_sym, "name": _name_of(leader_sym, name_map),
                        "boards": int(row.get("max_boards") or 0)},
-            "ths_count": len(ths_hits),
-            "ths_hits": ths_hits,
-            "catalysts": catalysts,
+            "ths_count": len(e["ths_hits"]),
+            "ths_hits": e["ths_hits"],
+            "catalysts": e["catalysts"],
             "reason": reason,
             "reason_source": source,
         })
 
-    return {"date": str(latest), "reasons": reasons, "note": MEMBERSHIP_NOTE}
+    result = {"date": str(latest), "reasons": reasons, "note": MEMBERSHIP_NOTE}
+    _REASON_CACHE[fp] = (time.time(), result)
+    if len(_REASON_CACHE) > _REASON_CACHE_MAX:
+        oldest = min(_REASON_CACHE, key=lambda k: _REASON_CACHE[k][0])
+        _REASON_CACHE.pop(oldest, None)
+    return result
 
 
 def build_mainline_compare(repo, top_n: int = 8, kind: str = "concept",
