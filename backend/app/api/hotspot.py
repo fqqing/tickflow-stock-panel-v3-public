@@ -25,8 +25,8 @@ def rotation_sniff(request: Request, days: int = Query(12, ge=7, le=30),
 
 
 @router.get("/flash-summary")
-def flash_hotspot(request: Request, size: int = Query(60, ge=10, le=200),
-                  top_n: int = Query(12, ge=1, le=30)):
-    """快报 → 今日热点聚合(东财 7x24 快讯按题材聚类 + 关联个股)。"""
+async def flash_hotspot(request: Request, size: int = Query(60, ge=10, le=200),
+                        top_n: int = Query(12, ge=1, le=30)):
+    """快报 → 今日热点聚合(东财 7x24 快讯按题材聚类 + 关联个股 + LLM 归纳)。"""
     repo = request.app.state.repo
-    return market_hotspot.build_flash_hotspot(repo, size=size, top_n=top_n)
+    return await market_hotspot.build_flash_hotspot(repo, size=size, top_n=top_n)

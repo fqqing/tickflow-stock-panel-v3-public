@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from datetime import date, timedelta
@@ -281,7 +282,68 @@ def _fetch_flash_items(size: int = 60, column: int = 102) -> list[dict]:
     return items
 
 
-def build_flash_hotspot(repo, size: int = 60, top_n: int = 12) -> dict:
+_SUMMARY_CACHE: dict[str, tuple[float, str]] = {}
+_SUMMARY_TTL = 300.0
+_SUMMARY_CACHE_MAX = 50
+
+
+def _hotspot_fingerprint(date_str: str, hotspots: list[dict]) -> str:
+    """用日期 + 标题集合生成摘要缓存指纹。"""
+    titles = "|".join(h.get("title", "") for h in hotspots[:20])
+    return hashlib.md5(f"{date_str}:{titles}".encode("utf-8")).hexdigest()
+
+
+def _rule_summarize_hotspots(hotspots: list[dict]) -> str:
+    """规则版摘要: 直接按聚类结果拼「今日热点」编号列表(用户样例格式)。"""
+    lines = ["今日热点："]
+    for i, h in enumerate(hotspots, 1):
+        topic = (h.get("topic") or "要闻").strip()
+        names = "、".join(s.get("name") for s in h.get("stocks", []) if s.get("name"))
+        suffix = f"（{topic}：{names}）" if names else f"（{topic}）"
+        lines.append(f"{i}. {h.get('title', '')}{suffix}")
+    return "\n".join(lines)
+
+
+async def _llm_summarize_hotspots(hotspots: list[dict]) -> str | None:
+    """LLM 版摘要: 把规则聚类结果归纳成自然语言「今日热点」列表。
+
+    未配置 AI 或调用失败时返回 None, 调用方降级规则版。
+    """
+    from app.services.ai_provider import ai_configured, generate_ai_text
+
+    if not hotspots or not ai_configured():
+        return None
+
+    feed = []
+    for h in hotspots:
+        topic = (h.get("topic") or "要闻").strip()
+        names = "、".join(s.get("name") for s in h.get("stocks", []) if s.get("name"))
+        feed.append(f"- {h.get('title', '')}（题材：{topic}；关联：{names or '无'}）")
+    material = "\n".join(feed)
+
+    system = (
+        "你是 A 股盘后复盘助手。请把下面这些 7x24 快讯热点条目，归纳成简洁的「今日热点」列表。\n"
+        "要求：\n"
+        "1. 同一主题的多条合并为一条，去重去噪，最多 12 条。\n"
+        "2. 每条格式：序号. 事件一句话简述（题材名：关联个股名，用顿号分隔）。\n"
+        "3. 提炼核心事实，不要照抄原快讯标题；没有个股的不要硬凑个股。\n"
+        "4. 只输出列表本身，第一行固定为「今日热点：」，不要任何前言、标题、解释或额外符号。"
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": material},
+    ]
+    try:
+        text = await generate_ai_text(messages, temperature=0.3, max_tokens=1200, timeout=60.0)
+        text = (text or "").strip()
+        return text or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("LLM 归纳热点失败, 降级规则版: %s", e)
+        return None
+
+
+async def build_flash_hotspot(repo, size: int = 60, top_n: int = 12,
+                              use_ai: bool = True) -> dict:
     """快报 → 今日热点: 把 7x24 快讯按题材聚类, 每个热点关联个股。
 
     归类逻辑(无 AI 依赖):
@@ -289,14 +351,18 @@ def build_flash_hotspot(repo, size: int = 60, top_n: int = 12) -> dict:
       2. 热点自带关联个股(东财 stockList), 不足时用该概念当日涨停/领涨股补强。
       3. 按 important + share + 关联个股数 排序, 输出「编号 + 事件 + (题材: 个股)」。
 
+    归纳(可选 AI): use_ai=True 且 AI 已配置时, 用 LLM 把聚类结果归纳成自然语言
+    「今日热点」列表(带 5 分钟缓存); AI 未配置或失败时降级为规则拼接。
+
     返回:
-      { "date": ..., "hotspots": [ {rank, title, topic, stocks:[{symbol,name}]} ] }
+      { "date": ..., "hotspots": [ {title, topic, stocks:[{symbol,name}]} ],
+        "summary": "今日热点：...", "summary_source": "ai"|"rule" }
     """
     from app.services.rps_rotation import _load_concept_map_df
 
     items = _fetch_flash_items(size)
     if not items:
-        return {"date": str(date.today()), "hotspots": []}
+        return {"date": str(date.today()), "hotspots": [], "summary": "", "summary_source": "rule"}
 
     data_dir = repo.store.data_dir
     name_map = _load_name_map(data_dir)
@@ -341,4 +407,32 @@ def build_flash_hotspot(repo, size: int = 60, top_n: int = 12) -> dict:
 
     # 排序: important 优先 → share → 关联个股数
     hotspots.sort(key=lambda h: (h["important"], h["share"], len(h["stocks"])), reverse=True)
-    return {"date": str(date.today()), "hotspots": hotspots[:top_n]}
+    result = hotspots[:top_n]
+    date_str = str(date.today())
+
+    summary: str
+    source: str
+    if use_ai:
+        fp = _hotspot_fingerprint(date_str, result)
+        hit = _SUMMARY_CACHE.get(fp)
+        if hit and time.time() - hit[0] < _SUMMARY_TTL:
+            summary, source = hit[1], "ai"
+        else:
+            summary = await _llm_summarize_hotspots(result)
+            if summary:
+                source = "ai"
+                _SUMMARY_CACHE[fp] = (time.time(), summary)
+                if len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
+                    oldest = min(_SUMMARY_CACHE, key=lambda k: _SUMMARY_CACHE[k][0])
+                    _SUMMARY_CACHE.pop(oldest, None)
+            else:
+                summary, source = _rule_summarize_hotspots(result), "rule"
+    else:
+        summary, source = _rule_summarize_hotspots(result), "rule"
+
+    return {
+        "date": date_str,
+        "hotspots": result,
+        "summary": summary,
+        "summary_source": source,
+    }

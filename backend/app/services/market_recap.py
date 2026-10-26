@@ -179,8 +179,61 @@ def _build_emotion_block(overview: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
-    """构建用户消息:复盘日期 + 市场数据精简切片 + 新闻 + 关注点。"""
+def _build_mainline_block(repo) -> str:
+    """主线梯队精简块(供复盘 prompt 注入「板块主线」)。
+
+    纯增量复用 market_hotspot 的主线全景, 不重算指标; 失败降级为占位说明。
+    """
+    try:
+        from app.services.market_hotspot import build_mainline_panorama
+        pano = build_mainline_panorama(repo, top_n=6, kind="concept")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("mainline block failed: %s", e)
+        return "(暂无主线数据)"
+    items = pano.get("mainlines") or []
+    if not items:
+        return "(暂无主线数据)"
+    out = []
+    for m in items:
+        leader = m.get("leader") or {}
+        leader_s = f"{leader.get('name') or leader.get('symbol') or '—'}({leader.get('boards', 0)}板)"
+        front = "、".join(
+            f"{s.get('name') or s.get('symbol')}({s.get('boards', 0)}板)"
+            for s in (m.get("front") or [])[:5]
+        )
+        line = (
+            f"- #{m.get('rank')} {m.get('member')} (主线分 {m.get('score')}, "
+            f"涨停 {m.get('limit_up_count')} 家, 最高 {m.get('max_boards')} 板): 龙头 {leader_s}"
+        )
+        if front:
+            line += f", 前排 {front}"
+        out.append(line)
+    return "\n".join(out)
+
+
+async def _build_hotspot_block(repo) -> str:
+    """快报热点摘要块(规则版, 供复盘 prompt 注入「消息催化」)。
+
+    刻意用 use_ai=False 的规则版: 复盘本身已是一次 LLM 调用, 这里再嵌套一次
+    LLM 归纳会拉长链路且增加失败面; 规则版「今日热点」列表已足够作素材。
+    """
+    try:
+        from app.services.market_hotspot import build_flash_hotspot
+        hs = await build_flash_hotspot(repo, size=60, top_n=12, use_ai=False)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("hotspot block failed: %s", e)
+        return "(暂无快报热点数据)"
+    return hs.get("summary") or "(暂无快报热点数据)"
+
+
+def _build_user_prompt(
+    overview: dict,
+    news: list[dict],
+    focus: str,
+    mainline_block: str = "",
+    hotspot_block: str = "",
+) -> str:
+    """构建用户消息:复盘日期 + 市场数据精简切片 + 主线梯队 + 快报热点 + 新闻 + 关注点。"""
     as_of = overview.get("as_of") or "今日"
 
     parts: list[str] = [
@@ -201,6 +254,12 @@ def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
         "## 行业板块排名",
         _build_sector_block(overview.get("industry_rank"), "行业"),
     ]
+
+    if mainline_block:
+        parts.extend(["", "## 主线梯队(客观数据, 供「板块主线」一节引用)", mainline_block])
+
+    if hotspot_block:
+        parts.extend(["", "## 今日热点快讯(客观数据, 供「消息催化」一节引用)", hotspot_block])
 
     if news:
         news_lines = []
@@ -300,7 +359,14 @@ async def recap_market_stream(
     try:
         from app.services.ai_provider import stream_ai_text
 
-        user_prompt = _build_user_prompt(overview, news or [], focus)
+        # 主线梯队 + 快报热点: 纯增量复用, 失败静默降级为空串(不阻断复盘)
+        mainline_block = _build_mainline_block(repo)
+        hotspot_block = await _build_hotspot_block(repo)
+
+        user_prompt = _build_user_prompt(
+            overview, news or [], focus,
+            mainline_block=mainline_block, hotspot_block=hotspot_block,
+        )
         got_content = False
         async for delta in stream_ai_text(
             [
