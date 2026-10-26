@@ -1,0 +1,32 @@
+"""市场主线全景 / 主线转换嗅探 / 快报热点聚合 — API。"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Query, Request
+
+from app.services import market_hotspot
+
+router = APIRouter(prefix="/api/hotspot", tags=["hotspot"])
+
+
+@router.get("/mainline")
+def mainline_panorama(request: Request, top_n: int = Query(8, ge=1, le=20),
+                      kind: str = Query("concept")):
+    """主线梯队全景: 主线 → 龙头 → 前排 → 中排 → 后排。"""
+    repo = request.app.state.repo
+    return market_hotspot.build_mainline_panorama(repo, top_n=top_n, kind=kind)
+
+
+@router.get("/rotation")
+def rotation_sniff(request: Request, days: int = Query(12, ge=7, le=30),
+                   kind: str = Query("concept")):
+    """主线转换嗅探: 可能转主线 / 可能退潮 / 连续霸榜。"""
+    repo = request.app.state.repo
+    return market_hotspot.sniff_rotation(repo, days=days, kind=kind)
+
+
+@router.get("/flash-summary")
+def flash_hotspot(request: Request, size: int = Query(60, ge=10, le=200),
+                  top_n: int = Query(12, ge=1, le=30)):
+    """快报 → 今日热点聚合(东财 7x24 快讯按题材聚类 + 关联个股)。"""
+    repo = request.app.state.repo
+    return market_hotspot.build_flash_hotspot(repo, size=size, top_n=top_n)

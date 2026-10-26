@@ -25,6 +25,7 @@ from app.api import (
     news,
     ext_data,
     financials,
+    hotspot,
     indices,
     indices_market,
     intraday,
@@ -513,6 +514,7 @@ app.include_router(pipeline.router)
 app.include_router(data.router)
 app.include_router(ext_data.router)
 app.include_router(financials.router)
+app.include_router(hotspot.router)
 app.include_router(stock_analysis.router)
 app.include_router(market_recap.router)
 app.include_router(settings_api.router)
