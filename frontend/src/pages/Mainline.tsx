@@ -197,6 +197,23 @@ function MainlineReasonView() {
             {r.reason_source === 'ai' && <span className="rounded bg-amber-500/10 px-1 text-xs text-amber-400">AI</span>}
           </div>
           <div className="text-sm leading-relaxed">{r.reason}</div>
+          {r.ths_count > 0 && (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1 text-xs text-muted">
+                <Flame className="h-3.5 w-3.5 text-amber-400" />
+                同花顺涨停原因命中 {r.ths_count} 家
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {r.ths_hits.map((h, i) => (
+                  <span key={i} title={h.reason}
+                    className="inline-flex items-center gap-1.5 rounded border border-border bg-card px-2 py-0.5 text-xs">
+                    <span className="font-medium">{h.name}</span>
+                    <span className="text-muted">{h.reason}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {r.catalysts.length > 0 && (
             <div className="mt-2 space-y-1">
               {r.catalysts.map((c, i) => (

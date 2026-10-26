@@ -738,12 +738,109 @@ def _fetch_tx_boards(kind: str = "concept") -> dict[str, dict]:
     return out
 
 
+# ────────────────────────────────────────────────────────────────
+# 同花顺「涨停原因」源(zx.10jqka.com.cn/event/api/getharden)
+# ────────────────────────────────────────────────────────────────
+# 这是同花顺口径的题材热榜原子数据: 当日全部涨停股, 每只带 reason 题材标签
+# (如「人形机器人+智能包装+半年报增长」)。用它给主线题材做「涨停集群 + 涨停原因」
+# 级证据, 命中率远高于东财 7x24 快讯(不按题材打标)。
+
+_THS_HARDEN_URL = "https://zx.10jqka.com.cn/event/api/getharden"
+_THS_HARDEN_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_THS_HARDEN_TTL = 120.0
+_THS_SEPS = ("+", "，", "、", ",", "；", ";", " ")
+
+
+def _parse_ths_symbol(code: str) -> str:
+    """6 位股票代码 → 带交易所后缀的大写 symbol(如 300949 → 300949.SZ)。"""
+    c = (code or "").strip()[-6:]
+    if c.startswith("6"):
+        return f"{c}.SH"
+    if c.startswith(("4", "8")) or c.startswith("92"):
+        return f"{c}.BJ"
+    return f"{c}.SZ"
+
+
+def _split_reason_tags(reason: str) -> list[str]:
+    """把涨停原因拆成题材标签列表(去引号/空白/空项)。"""
+    text = (reason or "").replace("“", "").replace("”", "").replace("\"", "")
+    parts = [text]
+    for sep in _THS_SEPS:
+        parts = [p for chunk in parts for p in chunk.split(sep)]
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _fetch_ths_harden() -> list[dict]:
+    """拉同花顺涨停原因池。返回 [{symbol,name,reason,date}]。120s 缓存。
+
+    云端/本地直连免 key(与腾讯/东财快讯同网段)。失败返回空列表, 不抛。
+    """
+    import httpx
+
+    hit = _THS_HARDEN_CACHE.get("harden")
+    if hit and time.time() - hit[0] < _THS_HARDEN_TTL:
+        return hit[1]
+
+    try:
+        data = httpx.get(_THS_HARDEN_URL, timeout=12.0, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://www.10jqka.com.cn/",
+        }).json()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ths harden fetch failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    for r in (data.get("data") or []):
+        code = str(r.get("code") or "").strip()
+        if not code:
+            continue
+        out.append({
+            "symbol": _parse_ths_symbol(code).upper(),
+            "name": str(r.get("name") or "").strip(),
+            "reason": str(r.get("reason") or "").strip(),
+            "date": str(r.get("date") or "").strip(),
+        })
+    _THS_HARDEN_CACHE["harden"] = (time.time(), out)
+    return out
+
+
+def _ths_hits_for_member(member: str, harden: list[dict],
+                         member_syms: set[str]) -> list[dict]:
+    """找该主线题材在同花顺涨停原因池里命中的涨停股。
+
+    路 A(主): 涨停股 symbol 在该主线成分股里(主线 = 涨停集群, 成分股里的涨停股
+    必被同花顺收录) → 最准。
+    路 B(辅): 涨停 reason 的题材标签归一化后命中 member 名(跨口径兜底)。
+    """
+    hits: dict[str, dict] = {}
+    norm_member = _normalize_plate_name(member)
+    for h in harden:
+        sym = h["symbol"]
+        if sym in member_syms:
+            hit = True
+        else:
+            hit = False
+            for tag in _split_reason_tags(h["reason"]):
+                if norm_member and len(norm_member) >= 2 and (
+                        tag == norm_member or norm_member in tag or tag in norm_member):
+                    hit = True
+                    break
+        if hit:
+            hits[sym] = {"symbol": sym, "name": h["name"], "reason": h["reason"]}
+    return list(hits.values())
+
+
 def _rule_reason_for_mainline(member: str, leader_sym: str, name_map: dict,
-                              catalysts: list[dict]) -> str:
+                              catalysts: list[dict],
+                              ths_hits: list[dict] | None = None) -> str:
     leader_name = _name_of(leader_sym, name_map)
     head = member
     if leader_name:
         head += f"（龙头 {leader_name}）"
+    if ths_hits:
+        segs = [f"{h['name'] or h['symbol']}（{h['reason']}）" for h in ths_hits[:5]]
+        return f"{head}：同花顺涨停原因命中 {len(ths_hits)} 家 —— {'；'.join(segs)}"
     tops = [c["title"] for c in catalysts[:3]]
     if tops:
         return f"{head}：驱动消息「{'；'.join(tops)}」"
@@ -751,23 +848,30 @@ def _rule_reason_for_mainline(member: str, leader_sym: str, name_map: dict,
 
 
 async def _llm_reason_for_mainline(member: str, leader_sym: str, name_map: dict,
-                                   catalysts: list[dict]) -> str | None:
-    """LLM 版主线原因: 用快讯归纳成一句「题材名：因 XX 刺激，龙头 XX 领涨」。"""
+                                   catalysts: list[dict],
+                                   ths_hits: list[dict] | None = None) -> str | None:
+    """LLM 版主线原因: 用同花顺涨停原因(一等) + 东财快讯(二等)归纳成一句话。"""
     from app.services.ai_provider import ai_configured, generate_ai_text
 
     if not ai_configured():
         return None
     leader_name = _name_of(leader_sym, name_map)
-    feed = "\n".join(f"- {c['title']}" for c in catalysts)
+    feed_lines = []
+    for h in (ths_hits or []):
+        feed_lines.append(f"- [涨停] {h['name']}：涨停原因「{h['reason']}」")
+    for c in catalysts:
+        feed_lines.append(f"- [快讯] {c['title']}")
+    feed = "\n".join(feed_lines) or "（无）"
     system = (
-        "你是 A 股盘后复盘助手。给定一个当日主线题材、龙头股和若干条相关快讯，"
-        "用一句话说明「这个题材今日为什么走强/领涨」。\n"
-        "要求：只输出这一句话，格式：题材名：因 <核心驱动事件> 刺激，龙头 <股名> 领涨。"
-        "若快讯与题材关联弱，客观写「暂无明显消息面驱动，属资金/情绪推动」，不要编造事件。"
+        "你是 A 股盘后复盘助手。给定一个当日主线题材、龙头股、该题材今日涨停股"
+        "（含同花顺涨停原因标签）与若干条相关快讯，用一句话说明「这个题材今日为什么走强/领涨」。\n"
+        "要求：优先依据涨停股的涨停原因标签归纳核心驱动（题材/事件），再补充快讯要点；"
+        "只输出这一句话，格式：题材名：因 <核心驱动> 刺激，龙头 <股名> 领涨（涨停 N 家）。"
+        "若证据不足，客观写「暂无明显消息面驱动，属资金/情绪推动」，不要编造事件。"
     )
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"主线题材：{member}\n龙头：{leader_name or '未知'}\n相关快讯：\n{feed}"},
+        {"role": "user", "content": f"主线题材：{member}\n龙头：{leader_name or '未知'}\n证据：\n{feed}"},
     ]
     try:
         text = await generate_ai_text(messages, temperature=0.3, max_tokens=300, timeout=45.0)
@@ -779,15 +883,18 @@ async def _llm_reason_for_mainline(member: str, leader_sym: str, name_map: dict,
 
 async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
                                 use_ai: bool = True) -> dict:
-    """主线原因: 用快讯(标题关键词 + boards 板块字段)反查每条主线的驱动消息。
+    """主线原因: 同花顺涨停原因(一等) + 东财快讯(二等) 反查每条主线的驱动。
 
-    每条主线 → 收集命中它的东财 7x24 快讯(标题含概念名, 或 boards 板块映射到该概念),
-    重要快讯优先, 再叠 LLM 归纳成一句「因 XX 消息刺激」; AI 未配置/失败降级规则拼接。
+    一等证据 = 同花顺涨停原因池(getharden: 当日涨停股 + reason 题材标签)。主线成分股里
+    今日涨停的个股被同花顺收录, 直接给出「涨停 N 家 + 每只涨停原因」, 命中率贴近主线
+    定义本身(主线 = 涨停集群)。
+    二等证据 = 东财 7x24 快讯(标题关键词 + boards 板块字段)。
+    叠 LLM 归纳成一句「因 XX 刺激, 龙头 XX 领涨(涨停 N 家)」; AI 未配置/失败降级规则拼接。
 
     返回:
       { "date", "reasons": [ {member, score, rank, limit_up_count, max_boards,
-          leader:{symbol,name,boards}, catalysts:[{title,important,share}],
-          reason, reason_source} ], "note" }
+          leader:{symbol,name,boards}, ths_count, ths_hits:[{symbol,name,reason}],
+          catalysts:[{title,important,share}], reason, reason_source} ], "note" }
     """
     from app.services.market_mainline import load_mainline_history, MEMBERSHIP_NOTE
     from app.services.rps_rotation import _load_concept_map_df
@@ -806,31 +913,32 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
     concept_names: list[str] = (sorted(map_df[kind].unique().to_list(), key=len, reverse=True)
                                 if not map_df.is_empty() else [])
 
-    em_boards = _fetch_em_boards(kind)
-    em_to_ours, _ = _build_em_boards_mapping(em_boards, concept_names)
-
     items = _fetch_flash_items(size=200)
+    harden = _fetch_ths_harden()
 
     reasons: list[dict] = []
     for row in top.to_dicts():
         member = str(row.get("member") or "")
         leader_sym = str(row.get("leader_symbol") or "")
 
+        # 一等证据: 同花顺涨停原因(主线成分股 ∩ 涨停池, 辅以 reason 标签兜底)
+        member_syms: set[str] = set()
+        if not map_df.is_empty() and member:
+            member_syms = {
+                str(s).strip().upper()
+                for s in map_df.filter(pl.col(kind) == member)["_sym_up"].to_list()
+            }
+        ths_hits = _ths_hits_for_member(member, harden, member_syms)
+
+        # 二等证据: 东财快讯(仅标题关键词匹配; boards 板块反查依赖东财 push2,
+        # 云端永久限流已弃用)
         catalysts: list[dict] = []
         seen_ids: set[str] = set()
         for it in items:
             if it["id"] in seen_ids:
                 continue
-            matched = False
             title = it["title"]
             if member and len(member) >= 2 and member in title:
-                matched = True
-            if not matched:
-                for bk in it.get("boards", []):
-                    if em_to_ours.get(bk) == member:
-                        matched = True
-                        break
-            if matched:
                 seen_ids.add(it["id"])
                 catalysts.append({
                     "title": title,
@@ -841,12 +949,14 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
         catalysts = catalysts[:6]
 
         reason, source = "", "rule"
-        if catalysts and use_ai:
-            reason = await _llm_reason_for_mainline(member, leader_sym, name_map, catalysts)
+        if use_ai and (ths_hits or catalysts):
+            reason = await _llm_reason_for_mainline(member, leader_sym, name_map,
+                                                    catalysts, ths_hits)
             if reason:
                 source = "ai"
         if not reason:
-            reason = _rule_reason_for_mainline(member, leader_sym, name_map, catalysts)
+            reason = _rule_reason_for_mainline(member, leader_sym, name_map,
+                                               catalysts, ths_hits)
 
         reasons.append({
             "member": member,
@@ -856,6 +966,8 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
             "max_boards": int(row.get("max_boards") or 0),
             "leader": {"symbol": leader_sym, "name": _name_of(leader_sym, name_map),
                        "boards": int(row.get("max_boards") or 0)},
+            "ths_count": len(ths_hits),
+            "ths_hits": ths_hits,
             "catalysts": catalysts,
             "reason": reason,
             "reason_source": source,

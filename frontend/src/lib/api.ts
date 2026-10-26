@@ -1019,6 +1019,12 @@ export interface MainlineReasonCatalyst {
   share: number
 }
 
+export interface MainlineReasonThsHit {
+  symbol: string
+  name: string
+  reason: string
+}
+
 export interface MainlineReasonItem {
   member: string
   score: number
@@ -1026,6 +1032,8 @@ export interface MainlineReasonItem {
   limit_up_count: number
   max_boards: number
   leader: { symbol: string; name?: string; boards: number } | null
+  ths_count: number
+  ths_hits: MainlineReasonThsHit[]
   catalysts: MainlineReasonCatalyst[]
   reason: string
   reason_source: 'ai' | 'rule'
