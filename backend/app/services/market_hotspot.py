@@ -389,12 +389,16 @@ def _fetch_flash_items(size: int = 60, column: int = 102) -> list[dict]:
     items = []
     for r in raw:
         stocks = []
+        boards = []
         for s in (r.get("stockList") or []):
             prefix, _, code = s.partition(".")
             if prefix == "0" and code:
                 stocks.append(f"{code}.SZ")
             elif prefix == "1" and code:
                 stocks.append(f"{code}.SH")
+            elif prefix in ("90", "1007") and code:
+                # 板块 secid(90.BKxxxx / 1007.BKxxxx) -> 板块代码 BKxxxx
+                boards.append(code)
         text = (r.get("title") or "").strip()
         items.append({
             "id": r.get("code") or "",
@@ -403,6 +407,7 @@ def _fetch_flash_items(size: int = 60, column: int = 102) -> list[dict]:
             "important": r.get("titleColor") or 0,
             "share": r.get("share") or 0,
             "stocks": stocks,
+            "boards": boards,
         })
     _FLASH_CACHE[key] = (time.time(), items)
     if len(_FLASH_CACHE) > _FLASH_CACHE_MAX:
@@ -564,4 +569,385 @@ async def build_flash_hotspot(repo, size: int = 60, top_n: int = 12,
         "hotspots": result,
         "summary": summary,
         "summary_source": source,
+    }
+
+
+# ────────────────────────────────────────────────────────────────
+# 4. 东财板块榜(对比源) + 主线原因
+# ────────────────────────────────────────────────────────────────
+
+_EM_PLATE_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+_EM_PLATE_CACHE: dict[str, tuple[float, dict]] = {}
+_EM_PLATE_TTL = 120.0
+
+
+def _fetch_em_boards(kind: str = "concept") -> dict[str, dict]:
+    """拉东财板块榜(概念/行业)。返回 {BK代码: {name, change_pct, leader_name, up, down}}。
+
+    fs: m:90+t:3 = 概念板块, m:90+t:2 = 行业板块; fid=f3 按涨跌幅降序。
+    单次 pz=800 拉全量(概念约 500+ / 行业约 90), 云端直连免 key。
+    """
+    import httpx
+
+    key = kind
+    hit = _EM_PLATE_CACHE.get(key)
+    if hit and time.time() - hit[0] < _EM_PLATE_TTL:
+        return hit[1]
+
+    fs = "m:90+t:3" if kind == "concept" else "m:90+t:2"
+    url = (_EM_PLATE_URL + f"?pn=1&pz=800&po=1&np=1&fltt=2&invt=2&fid=f3&fs={fs}"
+           "&fields=f2,f3,f8,f12,f14,f104,f105,f128,f136")
+    try:
+        data = httpx.get(url, timeout=12.0,
+                         headers={"User-Agent": "Mozilla/5.0",
+                                  "Referer": "https://quote.eastmoney.com/"}).json()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("em board fetch failed: %s", e)
+        return {}
+
+    rows = ((data.get("data") or {}).get("diff")) or []
+    out: dict[str, dict] = {}
+    for r in rows:
+        code = str(r.get("f12") or "").strip()
+        name = str(r.get("f14") or "").strip()
+        if not code:
+            continue
+        out[code] = {
+            "name": name,
+            "change_pct": float(r.get("f3") or 0.0),
+            "leader_name": str(r.get("f128") or "").strip(),
+            "up": int(r.get("f104") or 0),
+            "down": int(r.get("f105") or 0),
+        }
+    _EM_PLATE_CACHE[key] = (time.time(), out)
+    return out
+
+
+def _normalize_plate_name(name: str) -> str:
+    """板块名归一化: 去空格 + 去「概念/板块/指数」后缀, 用于跨源名称对齐。"""
+    n = (name or "").strip().replace(" ", "")
+    for suf in ("概念", "板块", "指数"):
+        if n.endswith(suf) and len(n) > len(suf) + 1:
+            n = n[: -len(suf)]
+    return n
+
+
+def _build_em_boards_mapping(em_boards: dict[str, dict],
+                             concept_names: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """东财板块 ↔ 本地概念名 双向映射(归一化子串匹配, 长名优先)。
+
+    返回 (em_to_ours: {BK代码: 概念名}, ours_to_em: {概念名: BK代码})。
+    """
+    em_to_ours: dict[str, str] = {}
+    ours_to_em: dict[str, str] = {}
+    ours_sorted = sorted(set(concept_names), key=len, reverse=True)
+    norm_ours = {_normalize_plate_name(c): c for c in ours_sorted}
+    for bk, info in em_boards.items():
+        norm_em = _normalize_plate_name(info.get("name") or "")
+        if not norm_em:
+            continue
+        target = norm_ours.get(norm_em)
+        if target is None:
+            for c in ours_sorted:
+                nc = _normalize_plate_name(c)
+                if nc and len(nc) >= 2 and (nc in norm_em or norm_em in nc):
+                    target = c
+                    break
+        if target:
+            em_to_ours[bk] = target
+            ours_to_em.setdefault(target, bk)
+    return em_to_ours, ours_to_em
+
+
+def _match_name_to_ours(src_names: list[str],
+                        concept_names: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """源板块名 ↔ 本地概念名 双向映射(归一化子串匹配, 长名优先)。
+
+    返回 (src_to_ours: {源板块名: 概念名}, ours_to_src: {概念名: 源板块名})。
+    """
+    src_to_ours: dict[str, str] = {}
+    ours_to_src: dict[str, str] = {}
+    ours_sorted = sorted(set(concept_names), key=len, reverse=True)
+    norm_ours = {_normalize_plate_name(c): c for c in ours_sorted}
+    for sname in src_names:
+        norm_s = _normalize_plate_name(sname)
+        if not norm_s:
+            continue
+        target = norm_ours.get(norm_s)
+        if target is None:
+            for c in ours_sorted:
+                nc = _normalize_plate_name(c)
+                if nc and len(nc) >= 2 and (nc in norm_s or norm_s in nc):
+                    target = c
+                    break
+        if target:
+            src_to_ours[sname] = target
+            ours_to_src.setdefault(target, sname)
+    return src_to_ours, ours_to_src
+
+
+_TX_PLATE_URL = "https://proxy.finance.qq.com/cgi/cgi-bin/rank/pt/getRank"
+_TX_PLATE_CACHE: dict[str, tuple[float, dict]] = {}
+_TX_PLATE_TTL = 120.0
+
+
+def _fetch_tx_boards(kind: str = "concept") -> dict[str, dict]:
+    """拉腾讯板块涨跌幅榜(概念/行业)。返回 {板块名: {change_pct, leader_name, code}}。
+
+    board_type: gn=概念(全量约 800), hy2=行业(约 124); count 上限 200, offset 翻页。
+    过滤 stock_type 含 FG 的风格类(昨日连板/昨日涨停等伪题材)。
+    腾讯是项目主源, 云端直连稳定可用 —— 作为「对比其他数据源」的板块榜。
+    """
+    import httpx
+
+    key = kind
+    hit = _TX_PLATE_CACHE.get(key)
+    if hit and time.time() - hit[0] < _TX_PLATE_TTL:
+        return hit[1]
+
+    bt = "gn" if kind == "concept" else "hy2"
+    out: dict[str, dict] = {}
+    offset = 0
+    while True:
+        url = f"{_TX_PLATE_URL}?board_type={bt}&sort_type=Price&direct=down&offset={offset}&count=200"
+        try:
+            data = httpx.get(url, timeout=12.0, headers={
+                "User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}).json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("tx board fetch failed: %s", e)
+            break
+        rows = ((data.get("data") or {}).get("rank_list")) or []
+        if not rows:
+            break
+        for r in rows:
+            if "FG" in (r.get("stock_type") or ""):  # 风格类伪题材
+                continue
+            name = str(r.get("name") or "").strip()
+            if not name:
+                continue
+            lz = r.get("lzg") or {}
+            out[name] = {
+                "change_pct": float(r.get("zdf") or 0.0),
+                "leader_name": str(lz.get("name") or "").strip(),
+                "code": str(r.get("code") or "").strip(),
+            }
+        offset += len(rows)
+        if len(rows) < 200:
+            break
+    _TX_PLATE_CACHE[key] = (time.time(), out)
+    return out
+
+
+def _rule_reason_for_mainline(member: str, leader_sym: str, name_map: dict,
+                              catalysts: list[dict]) -> str:
+    leader_name = _name_of(leader_sym, name_map)
+    head = member
+    if leader_name:
+        head += f"（龙头 {leader_name}）"
+    tops = [c["title"] for c in catalysts[:3]]
+    if tops:
+        return f"{head}：驱动消息「{'；'.join(tops)}」"
+    return f"{head}：今日快讯暂无直接驱动消息。"
+
+
+async def _llm_reason_for_mainline(member: str, leader_sym: str, name_map: dict,
+                                   catalysts: list[dict]) -> str | None:
+    """LLM 版主线原因: 用快讯归纳成一句「题材名：因 XX 刺激，龙头 XX 领涨」。"""
+    from app.services.ai_provider import ai_configured, generate_ai_text
+
+    if not ai_configured():
+        return None
+    leader_name = _name_of(leader_sym, name_map)
+    feed = "\n".join(f"- {c['title']}" for c in catalysts)
+    system = (
+        "你是 A 股盘后复盘助手。给定一个当日主线题材、龙头股和若干条相关快讯，"
+        "用一句话说明「这个题材今日为什么走强/领涨」。\n"
+        "要求：只输出这一句话，格式：题材名：因 <核心驱动事件> 刺激，龙头 <股名> 领涨。"
+        "若快讯与题材关联弱，客观写「暂无明显消息面驱动，属资金/情绪推动」，不要编造事件。"
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"主线题材：{member}\n龙头：{leader_name or '未知'}\n相关快讯：\n{feed}"},
+    ]
+    try:
+        text = await generate_ai_text(messages, temperature=0.3, max_tokens=300, timeout=45.0)
+        return (text or "").strip() or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("LLM 主线原因失败: %s", e)
+        return None
+
+
+async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
+                                use_ai: bool = True) -> dict:
+    """主线原因: 用快讯(标题关键词 + boards 板块字段)反查每条主线的驱动消息。
+
+    每条主线 → 收集命中它的东财 7x24 快讯(标题含概念名, 或 boards 板块映射到该概念),
+    重要快讯优先, 再叠 LLM 归纳成一句「因 XX 消息刺激」; AI 未配置/失败降级规则拼接。
+
+    返回:
+      { "date", "reasons": [ {member, score, rank, limit_up_count, max_boards,
+          leader:{symbol,name,boards}, catalysts:[{title,important,share}],
+          reason, reason_source} ], "note" }
+    """
+    from app.services.market_mainline import load_mainline_history, MEMBERSHIP_NOTE
+    from app.services.rps_rotation import _load_concept_map_df
+
+    data_dir = repo.store.data_dir
+    hist = load_mainline_history(data_dir, kind)
+    if hist.is_empty():
+        return {"date": None, "reasons": [], "note": MEMBERSHIP_NOTE}
+    latest = hist["date"].max()
+    top = hist.filter(pl.col("date") == latest).sort("rank").head(top_n)
+    if top.is_empty():
+        return {"date": str(latest), "reasons": [], "note": MEMBERSHIP_NOTE}
+
+    name_map = _load_name_map(data_dir)
+    map_df, _ = _load_concept_map_df(repo, kind)
+    concept_names: list[str] = (sorted(map_df[kind].unique().to_list(), key=len, reverse=True)
+                                if not map_df.is_empty() else [])
+
+    em_boards = _fetch_em_boards(kind)
+    em_to_ours, _ = _build_em_boards_mapping(em_boards, concept_names)
+
+    items = _fetch_flash_items(size=200)
+
+    reasons: list[dict] = []
+    for row in top.to_dicts():
+        member = str(row.get("member") or "")
+        leader_sym = str(row.get("leader_symbol") or "")
+
+        catalysts: list[dict] = []
+        seen_ids: set[str] = set()
+        for it in items:
+            if it["id"] in seen_ids:
+                continue
+            matched = False
+            title = it["title"]
+            if member and len(member) >= 2 and member in title:
+                matched = True
+            if not matched:
+                for bk in it.get("boards", []):
+                    if em_to_ours.get(bk) == member:
+                        matched = True
+                        break
+            if matched:
+                seen_ids.add(it["id"])
+                catalysts.append({
+                    "title": title,
+                    "important": bool(it["important"]),
+                    "share": int(it["share"] or 0),
+                })
+        catalysts.sort(key=lambda x: (x["important"], x["share"]), reverse=True)
+        catalysts = catalysts[:6]
+
+        reason, source = "", "rule"
+        if catalysts and use_ai:
+            reason = await _llm_reason_for_mainline(member, leader_sym, name_map, catalysts)
+            if reason:
+                source = "ai"
+        if not reason:
+            reason = _rule_reason_for_mainline(member, leader_sym, name_map, catalysts)
+
+        reasons.append({
+            "member": member,
+            "score": round(float(row.get("score") or 0.0), 1),
+            "rank": int(row.get("rank") or 0),
+            "limit_up_count": int(row.get("limit_up_count") or 0),
+            "max_boards": int(row.get("max_boards") or 0),
+            "leader": {"symbol": leader_sym, "name": _name_of(leader_sym, name_map),
+                       "boards": int(row.get("max_boards") or 0)},
+            "catalysts": catalysts,
+            "reason": reason,
+            "reason_source": source,
+        })
+
+    return {"date": str(latest), "reasons": reasons, "note": MEMBERSHIP_NOTE}
+
+
+def build_mainline_compare(repo, top_n: int = 8, kind: str = "concept",
+                           plate_scope: int = 30) -> dict:
+    """自算主线 vs 腾讯板块涨跌幅榜 交叉对照。
+
+    - 自算主线(mainline_history 最新 top_n) → 在腾讯板块榜里找对应板块的涨跌幅排名。
+    - consensus: both=两边都强(真主线) / ours_only=自算强但腾讯涨幅榜不认(警惕) /
+      no_match=腾讯榜里找不到对应板块(概念口径差异)。
+    - plate_top: 腾讯涨幅榜前 plate_scope, 标注是否已在我们主线里(未覆盖 = 潜在漏掉的新主线)。
+
+    返回:
+      { "date", "kind", "source": "tencent", "plate_total",
+        "mainlines": [ {member,score,rank,plate_name,plate_change_pct,plate_rank,
+           plate_leader,consensus} ],
+        "plate_top": [ {name,change_pct,leader,in_ours,ours_member} ], "note" }
+    """
+    from app.services.market_mainline import load_mainline_history, MEMBERSHIP_NOTE
+    from app.services.rps_rotation import _load_concept_map_df
+
+    data_dir = repo.store.data_dir
+    hist = load_mainline_history(data_dir, kind)
+    if hist.is_empty():
+        return {"date": None, "kind": kind, "source": "tencent", "plate_total": 0,
+                "mainlines": [], "plate_top": [], "note": MEMBERSHIP_NOTE}
+    latest = hist["date"].max()
+    top = hist.filter(pl.col("date") == latest).sort("rank").head(top_n)
+
+    map_df, _ = _load_concept_map_df(repo, kind)
+    concept_names = (sorted(map_df[kind].unique().to_list(), key=len, reverse=True)
+                     if not map_df.is_empty() else [])
+
+    tx_boards = _fetch_tx_boards(kind)
+    tx_to_ours, ours_to_tx = _match_name_to_ours(list(tx_boards.keys()), concept_names)
+
+    tx_sorted = sorted(tx_boards.items(), key=lambda kv: kv[1].get("change_pct", 0.0),
+                       reverse=True)
+    tx_rank_of_name = {name: i + 1 for i, (name, _) in enumerate(tx_sorted)}
+    plate_total = len(tx_sorted) or 1
+    top_pct_cut = max(10, int(plate_total * 0.2))
+
+    our_members = {str(r["member"]) for r in top.to_dicts()}
+
+    mainlines: list[dict] = []
+    for row in top.to_dicts():
+        member = str(row.get("member") or "")
+        tx_name = ours_to_tx.get(member)
+        info = tx_boards.get(tx_name) if tx_name else None
+        if info is None:
+            mainlines.append({
+                "member": member,
+                "score": round(float(row.get("score") or 0.0), 1),
+                "rank": int(row.get("rank") or 0),
+                "plate_name": None, "plate_change_pct": None, "plate_rank": None,
+                "plate_leader": None, "consensus": "no_match",
+            })
+            continue
+        plate_rank = tx_rank_of_name.get(tx_name)
+        mainlines.append({
+            "member": member,
+            "score": round(float(row.get("score") or 0.0), 1),
+            "rank": int(row.get("rank") or 0),
+            "plate_name": tx_name,
+            "plate_change_pct": round(float(info.get("change_pct") or 0.0), 2),
+            "plate_rank": plate_rank,
+            "plate_leader": info.get("leader_name"),
+            "consensus": "both" if (plate_rank is not None and plate_rank <= top_pct_cut) else "ours_only",
+        })
+
+    plate_top: list[dict] = []
+    for name, info in tx_sorted[:plate_scope]:
+        ours = tx_to_ours.get(name)
+        plate_top.append({
+            "name": name,
+            "change_pct": round(float(info.get("change_pct") or 0.0), 2),
+            "leader": info.get("leader_name"),
+            "in_ours": ours in our_members,
+            "ours_member": ours,
+        })
+
+    return {
+        "date": str(latest),
+        "kind": kind,
+        "source": "tencent",
+        "plate_total": plate_total,
+        "mainlines": mainlines,
+        "plate_top": plate_top,
+        "note": MEMBERSHIP_NOTE,
     }

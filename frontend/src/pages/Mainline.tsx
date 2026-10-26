@@ -8,11 +8,12 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Loader2, Route as RouteIcon, TrendingUp, TrendingDown, Crown, Flame, Newspaper, Repeat, CalendarDays } from 'lucide-react'
+import { Loader2, Route as RouteIcon, TrendingUp, TrendingDown, Crown, Flame, Newspaper, Repeat, CalendarDays, Lightbulb, ArrowLeftRight } from 'lucide-react'
 import {
   api,
   type RotationSniff,
   type MainlineCalendarCell,
+  type MainlineCompareItem,
 } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
 import { priceColorClass } from '@/lib/format'
@@ -175,6 +176,97 @@ function FlashHotspotView() {
   )
 }
 
+function MainlineReasonView() {
+  const q = useQuery({
+    queryKey: ['hotspot-mainline-reason'],
+    queryFn: () => api.mainlineReason(8, 'concept'),
+  })
+  if (q.isLoading) return <div className="flex items-center gap-2 text-sm text-muted"><Loader2 className="h-4 w-4 animate-spin" />主线原因分析中…</div>
+  if (q.isError) return <div className="text-sm text-muted">主线原因加载失败</div>
+  const d = q.data
+  if (!d || !d.reasons.length) return <div className="text-sm text-muted">暂无主线原因数据。</div>
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-muted">{d.date ? `截至 ${d.date} 收盘` : ''}{d.note ? ` · ${d.note}` : ''}</div>
+      {d.reasons.map(r => (
+        <div key={r.member} className="rounded-md border border-border bg-background/40 p-3">
+          <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-semibold text-amber-400">#{r.rank}</span>
+            <span className="text-sm font-semibold">{r.member}</span>
+            <span className="text-xs text-muted">主线分 {r.score} · 涨停 {r.limit_up_count} 家</span>
+            {r.reason_source === 'ai' && <span className="rounded bg-amber-500/10 px-1 text-xs text-amber-400">AI</span>}
+          </div>
+          <div className="text-sm leading-relaxed">{r.reason}</div>
+          {r.catalysts.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {r.catalysts.map((c, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-xs text-muted">
+                  {c.important && <span className="shrink-0 rounded bg-red-500/15 px-1 text-xs leading-4 text-red-400">重</span>}
+                  <span className="line-clamp-2">{c.title}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function consensusBadge(c: MainlineCompareItem['consensus']) {
+  if (c === 'both') return <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-xs font-semibold text-red-400">双确认</span>
+  if (c === 'ours_only') return <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-semibold text-amber-400">仅自算</span>
+  return <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted">未匹配</span>
+}
+
+function MainlineCompareView() {
+  const q = useQuery({
+    queryKey: ['hotspot-mainline-compare'],
+    queryFn: () => api.mainlineCompare(8, 'concept', 30),
+  })
+  if (q.isLoading) return <div className="flex items-center gap-2 text-sm text-muted"><Loader2 className="h-4 w-4 animate-spin" />板块对比中…</div>
+  if (q.isError) return <div className="text-sm text-muted">板块榜加载失败</div>
+  const d = q.data
+  if (!d || (!d.mainlines.length && !d.plate_top.length)) return <div className="text-sm text-muted">暂无对比数据。</div>
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-muted">自算主线 vs 腾讯板块涨幅榜（共 {d.plate_total} 板块）· 双确认 = 两边都强{d.note ? ` · ${d.note}` : ''}</div>
+      <div className="space-y-1.5">
+        {d.mainlines.map(m => (
+          <div key={m.member} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background/40 p-2">
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-semibold text-amber-400">#{m.rank}</span>
+            <span className="text-sm font-medium">{m.member}</span>
+            {consensusBadge(m.consensus)}
+            <span className="ml-auto text-xs text-muted">
+              {m.plate_name ? <span className="mr-1">{m.plate_name}</span> : null}
+              {m.plate_change_pct != null ? <span className={priceColorClass(m.plate_change_pct)}>{pctText(m.plate_change_pct)}</span> : <span>腾讯榜未匹配</span>}
+              {m.plate_rank != null ? <span> · 腾讯第{m.plate_rank}</span> : null}
+            </span>
+          </div>
+        ))}
+      </div>
+      {d.plate_top.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs font-semibold text-muted">腾讯涨幅榜前 {d.plate_top.length}（未覆盖 = 潜在新主线）</div>
+          <div className="space-y-1">
+            {d.plate_top.map((e, i) => (
+              <div key={`${e.name}-${i}`} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="w-5 text-muted">{i + 1}</span>
+                <span className="font-medium">{e.name}</span>
+                <span className={priceColorClass(e.change_pct)}>{pctText(e.change_pct)}</span>
+                {e.leader && <span className="text-muted">领涨 {e.leader}</span>}
+                {e.in_ours
+                  ? <span className="text-muted">→ 已在主线（{e.ours_member}）</span>
+                  : <span className="rounded bg-emerald-500/15 px-1 text-emerald-400">未覆盖</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function cellTitle(c: MainlineCalendarCell): string {
   return [
     c.member,
@@ -295,7 +387,9 @@ export function Mainline() {
         </Card>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <Card title="主线梯队全景" icon={<Crown className="h-4 w-4" />}><MainlinePanoramaView /></Card>
+          <Card title="主线原因" icon={<Lightbulb className="h-4 w-4" />}><MainlineReasonView /></Card>
           <Card title="主线转换嗅探" icon={<Repeat className="h-4 w-4" />}><RotationSniffView /></Card>
+          <Card title="腾讯板块对比" icon={<ArrowLeftRight className="h-4 w-4" />}><MainlineCompareView /></Card>
           <Card title="快报 · 今日热点" icon={<Newspaper className="h-4 w-4" />}><FlashHotspotView /></Card>
         </div>
       </div>

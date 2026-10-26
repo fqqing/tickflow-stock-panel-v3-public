@@ -1013,6 +1013,59 @@ export interface MainlineCalendar {
   note?: string
 }
 
+export interface MainlineReasonCatalyst {
+  title: string
+  important: boolean
+  share: number
+}
+
+export interface MainlineReasonItem {
+  member: string
+  score: number
+  rank: number
+  limit_up_count: number
+  max_boards: number
+  leader: { symbol: string; name?: string; boards: number } | null
+  catalysts: MainlineReasonCatalyst[]
+  reason: string
+  reason_source: 'ai' | 'rule'
+}
+
+export interface MainlineReason {
+  date: string | null
+  reasons: MainlineReasonItem[]
+  note?: string
+}
+
+export interface MainlineCompareItem {
+  member: string
+  score: number
+  rank: number
+  plate_name: string | null
+  plate_change_pct: number | null
+  plate_rank: number | null
+  plate_leader: string | null
+  consensus: 'both' | 'ours_only' | 'no_match'
+}
+
+export interface PlateTopItem {
+  name: string
+  change_pct: number
+  leader: string | null
+  in_ours: boolean
+  ours_member: string | null
+}
+
+export interface MainlineCompare {
+  date: string | null
+  kind: string
+  source: string
+  plate_total: number
+  mainlines: MainlineCompareItem[]
+  plate_top: PlateTopItem[]
+  note?: string
+}
+
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
   id: string
@@ -2972,6 +3025,10 @@ export const api = {
     request<RotationSniff>(`/api/hotspot/rotation?days=${days}&kind=${kind}`),
   flashHotspot: (size = 60, topN = 12) =>
     request<FlashHotspot>(`/api/hotspot/flash-summary?size=${size}&top_n=${topN}`),
+  mainlineReason: (topN = 8, kind: 'concept' | 'industry' = 'concept') =>
+    request<MainlineReason>(`/api/hotspot/mainline-reason?top_n=${topN}&kind=${kind}`),
+  mainlineCompare: (topN = 8, kind: 'concept' | 'industry' = 'concept', plateScope = 30) =>
+    request<MainlineCompare>(`/api/hotspot/mainline-compare?top_n=${topN}&kind=${kind}&plate_scope=${plateScope}`),
 
   // 概念涨幅轮动矩阵: 每列(日期)各自把所有概念按当天涨幅从高到低排序
   rpsRotation: (days: number, kind?: 'concept' | 'industry', level?: number) =>
