@@ -61,6 +61,7 @@ import {
   Users,
   UserRound,
   Target,
+  Route,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -97,6 +98,7 @@ const nav = [
   { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
   { to: '/news', label: '资讯', icon: Newspaper },
   { to: '/limit-ladder', label: '连板梯队', icon: Flame },
+  { to: '/mainline', label: '主线', icon: Route },
   { to: '/concept-analysis', label: '概念分析', icon: Layers3 },
   { to: '/industry-analysis', label: '行业分析', icon: Landmark },
   { to: '/financials', label: '财务分析', icon: FileText },

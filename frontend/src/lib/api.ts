@@ -916,6 +916,67 @@ export interface MainlineResult {
   filter: MainlineFilter
 }
 
+// ===== 主线全景 / 转换嗅探 / 快报热点 =====
+export interface HotspotStock {
+  symbol: string
+  name?: string
+  boards?: number
+  amount?: number
+  change_pct?: number
+}
+
+export interface MainlinePanoramaItem {
+  member: string
+  score: number
+  rank: number
+  limit_up_count: number
+  max_boards: number
+  rungs_filled: number
+  ge2_count: number
+  leader: { symbol: string; name?: string; boards: number } | null
+  front: HotspotStock[]
+  mid: HotspotStock[]
+  rear: HotspotStock[]
+}
+
+export interface MainlinePanorama {
+  date: string | null
+  mainlines: MainlinePanoramaItem[]
+  note?: string
+}
+
+export interface RotationSignalItem {
+  member: string
+  ranks: number[]
+  avg_rank: number
+  rank_std: number
+  mainline_delta?: number | null
+}
+
+export interface RotationSniff {
+  dates: string[]
+  ascending: RotationSignalItem[]
+  fading: RotationSignalItem[]
+  persistent: RotationSignalItem[]
+}
+
+export interface FlashHotspotItem {
+  title: string
+  topic: string
+  important: boolean
+  share: number
+  stocks: { symbol: string; name?: string }[]
+}
+
+export interface FlashHotspot {
+  date: string
+  hotspots: FlashHotspotItem[]
+  /** 自然语言归纳「今日热点」列表(LLM 或规则降级) */
+  summary?: string
+  /** summary 来源: ai=LLM 归纳 / rule=规则拼接 */
+  summary_source?: 'ai' | 'rule'
+}
+
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
   id: string
@@ -2865,6 +2926,14 @@ export const api = {
   marketSnapshot: () =>
     request<{ as_of: string | null; rows: MarketSnapshotRow[] }>('/api/screener/market-snapshot'),
   overviewMarket: (asOf?: string, market?: string) => request<OverviewMarket>(`/api/overview/market${asOf || market ? `?${asOf ? `as_of=${asOf}&` : ''}market=${market ?? 'cn'}` : ''}`),
+
+  // 主线全景 / 主线转换嗅探 / 快报热点聚合
+  mainlinePanorama: (topN = 8, kind: 'concept' | 'industry' = 'concept') =>
+    request<MainlinePanorama>(`/api/hotspot/mainline?top_n=${topN}&kind=${kind}`),
+  rotationSniff: (days = 12, kind: 'concept' | 'industry' = 'concept') =>
+    request<RotationSniff>(`/api/hotspot/rotation?days=${days}&kind=${kind}`),
+  flashHotspot: (size = 60, topN = 12) =>
+    request<FlashHotspot>(`/api/hotspot/flash-summary?size=${size}&top_n=${topN}`),
 
   // 概念涨幅轮动矩阵: 每列(日期)各自把所有概念按当天涨幅从高到低排序
   rpsRotation: (days: number, kind?: 'concept' | 'industry', level?: number) =>

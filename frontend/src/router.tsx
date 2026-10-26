@@ -35,6 +35,7 @@ const StockTerminal = lazy(() => import('./pages/StockTerminal').then(m => ({ de
 const News = lazy(() => import('./pages/News').then(m => ({ default: m.News })))
 const Review = lazy(() => import('./pages/Review').then(m => ({ default: m.Review })))
 const LimitUpLadder = lazy(() => import('./pages/LimitUpLadder').then(m => ({ default: m.LimitUpLadder })))
+const Mainline = lazy(() => import('./pages/Mainline').then(m => ({ default: m.Mainline })))
 const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.Branding })))
 const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
 const Users = lazy(() => import('./pages/Users').then(m => ({ default: m.Users })))
@@ -67,6 +68,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/data',
   '/monitor',
   '/limit-ladder',
+  '/mainline',
   '/indices',
   '/regime',
   '/abnormal',
@@ -187,6 +189,7 @@ export const router = createBrowserRouter([
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
+      { path: 'mainline', element: <Mainline /> },
       { path: 'indices', element: <Indices /> },
     { path: 'regime', element: <Regime /> },
       { path: 'abnormal', element: <AbnormalMoves /> },
