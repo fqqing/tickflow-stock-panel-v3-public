@@ -119,30 +119,36 @@ def build_mainline_panorama(repo, top_n: int = 8, kind: str = "concept") -> dict
 
         front, mid, rear = [], [], []
         if has_enriched:
+            # 连板列由 enriched 历史缓存的 compute_limit_signals 提供; instruments
+            # 缓存未就绪时会退化缺失该列, 此时只保留龙头/后排(涨幅), 梯队(前排/中排)留空。
+            has_consec = "consecutive_limit_ups" in enriched.columns
             sub = enriched.filter(pl.col("symbol").str.to_uppercase().is_in(sorted(member_syms)))
             if not sub.is_empty():
-                # 前排: 2板以上核心梯队, 按连板高度/成交额降序
-                core = sub.filter(pl.col("consecutive_limit_ups") >= 2).sort(
-                    ["consecutive_limit_ups", "amount"], descending=[True, True])
-                front = [
-                    {"symbol": r["symbol"], "name": _name_of(r["symbol"], name_map),
-                     "boards": int(r["consecutive_limit_ups"] or 0),
-                     "amount": float(r["amount"] or 0.0) / 1e8}
-                    for r in core.to_dicts()
-                ]
-                # 中排: 首板
-                first = sub.filter(pl.col("consecutive_limit_ups") == 1).sort(
-                    "amount", descending=True)
-                mid = [
-                    {"symbol": r["symbol"], "name": _name_of(r["symbol"], name_map),
-                     "boards": 1, "amount": float(r["amount"] or 0.0) / 1e8}
-                    for r in first.to_dicts()
-                ]
-                # 后排: 未涨停但今日涨幅居前的跟风/补涨(取前 6)
+                if has_consec:
+                    # 前排: 2板以上核心梯队, 按连板高度/成交额降序
+                    core = sub.filter(pl.col("consecutive_limit_ups") >= 2).sort(
+                        ["consecutive_limit_ups", "amount"], descending=[True, True])
+                    front = [
+                        {"symbol": r["symbol"], "name": _name_of(r["symbol"], name_map),
+                         "boards": int(r["consecutive_limit_ups"] or 0),
+                         "amount": float(r["amount"] or 0.0) / 1e8}
+                        for r in core.to_dicts()
+                    ]
+                    # 中排: 首板
+                    first = sub.filter(pl.col("consecutive_limit_ups") == 1).sort(
+                        "amount", descending=True)
+                    mid = [
+                        {"symbol": r["symbol"], "name": _name_of(r["symbol"], name_map),
+                         "boards": 1, "amount": float(r["amount"] or 0.0) / 1e8}
+                        for r in first.to_dicts()
+                    ]
+                # 后排: 未涨停但今日涨幅居前的跟风/补涨(取前 6)。有连板列时用 <1 过滤,
+                # 否则仅按涨幅>0 兜底。
                 follow = sub.filter(
                     (pl.col("consecutive_limit_ups") < 1)
                     & (pl.col("change_pct") > 0)
-                ).sort("change_pct", descending=True).head(6)
+                ) if has_consec else sub.filter(pl.col("change_pct") > 0)
+                follow = follow.sort("change_pct", descending=True).head(6)
                 rear = [
                     {"symbol": r["symbol"], "name": _name_of(r["symbol"], name_map),
                      "change_pct": float(r["change_pct"] or 0.0) * 100}
