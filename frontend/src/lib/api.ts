@@ -977,6 +977,42 @@ export interface FlashHotspot {
   summary_source?: 'ai' | 'rule'
 }
 
+export interface MainlineCalendarCell {
+  member: string
+  score: number
+  limit_up_count: number
+  max_boards: number
+  leader_symbol: string
+  leader_name?: string
+  /** 截至今日连续上榜(top_n)天数 */
+  streak: number
+  /** 相对前一交易日是否新晋 */
+  is_new: boolean
+}
+
+export interface MainlineCalendarRow {
+  rank: number
+  /** 与 dates 对齐, 该日该名次缺位为 null */
+  cells: (MainlineCalendarCell | null)[]
+}
+
+export interface MainlineCalendarMemberSummary {
+  member: string
+  days_on: number
+  best_rank: number
+  streak: number
+  latest_score: number | null
+}
+
+export interface MainlineCalendar {
+  kind: string
+  top_n: number
+  dates: string[]
+  rows: MainlineCalendarRow[]
+  member_summary: MainlineCalendarMemberSummary[]
+  note?: string
+}
+
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
   id: string
@@ -2930,6 +2966,8 @@ export const api = {
   // 主线全景 / 主线转换嗅探 / 快报热点聚合
   mainlinePanorama: (topN = 8, kind: 'concept' | 'industry' = 'concept') =>
     request<MainlinePanorama>(`/api/hotspot/mainline?top_n=${topN}&kind=${kind}`),
+  mainlineCalendar: (days = 30, topN = 8, kind: 'concept' | 'industry' = 'concept') =>
+    request<MainlineCalendar>(`/api/hotspot/mainline-calendar?days=${days}&top_n=${topN}&kind=${kind}`),
   rotationSniff: (days = 12, kind: 'concept' | 'industry' = 'concept') =>
     request<RotationSniff>(`/api/hotspot/rotation?days=${days}&kind=${kind}`),
   flashHotspot: (size = 60, topN = 12) =>

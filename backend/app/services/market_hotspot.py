@@ -175,6 +175,129 @@ def build_mainline_panorama(repo, top_n: int = 8, kind: str = "concept") -> dict
     return {"date": str(latest), "mainlines": mainlines, "note": MEMBERSHIP_NOTE}
 
 
+def build_mainline_calendar(repo, days: int = 30, top_n: int = 8,
+                            kind: str = "concept") -> dict:
+    """板块周期表(开盘啦「板块周期表」同款): 往日每日主线排行 → 日期 × 名次矩阵。
+
+    数据源 = mainline_history(按日持久化的主线排行, enriched 全历史回算, 本地
+    自 2000 年全覆盖), 无需增量等待。另计算每个题材「截至今日连续上榜天数」
+    (streak)与「新晋」标记(前一日未上榜), 供前端做持续性高亮。
+
+    返回:
+      {
+        "kind", "top_n",
+        "dates": ["2026-09-15", ..., "2026-10-26"],   # 升序, 长度 ≤ days
+        "rows": [                                       # 每个名次一行
+          {"rank": 1, "cells": [
+              {"member": "MLOps概念", "score": 89.0, "limit_up_count": 5,
+               "max_boards": 4, "leader_symbol": "301049", "leader_name": "飞天经纬",
+               "streak": 7, "is_new": false} | null,   # 该日该名次缺位时为 null
+          ]}, ...
+        ],
+        "member_summary": [                              # 按近 30 日上榜总次数排序
+          {"member": "...", "days_on": 18, "best_rank": 1, "streak": 7,
+           "latest_score": 89.0}, ...
+        ],
+        "note": MEMBERSHIP_NOTE,
+      }
+    """
+    from app.services.market_mainline import load_mainline_history, MEMBERSHIP_NOTE
+
+    days = max(5, min(90, days))
+    top_n = max(3, min(15, top_n))
+    data_dir = repo.store.data_dir
+    hist = load_mainline_history(data_dir, kind)
+    if hist.is_empty():
+        return {"kind": kind, "top_n": top_n, "dates": [], "rows": [],
+                "member_summary": [], "note": MEMBERSHIP_NOTE}
+
+    all_dates = sorted(hist["date"].unique().to_list())
+    dates = all_dates[-days:]
+    date_set = set(dates)
+    sub = hist.filter(pl.col("date").is_in(sorted(date_set)) & (pl.col("rank") <= top_n))
+    if sub.is_empty():
+        return {"kind": kind, "top_n": top_n, "dates": [str(d) for d in dates],
+                "rows": [], "member_summary": [], "note": MEMBERSHIP_NOTE}
+
+    name_map = _load_name_map(data_dir)
+
+    # 连续上榜 streak: 以最后一日为锚, 向前数该题材每天都在 top_n 的天数。
+    # (date, member) 对一次建 set, 避免逐日 filter。
+    anchor = dates[-1]
+    all_top = hist.filter(pl.col("rank") <= top_n).select(["date", "member"])
+    top_pairs = set(zip(
+        all_top["date"].cast(pl.Utf8).to_list(),
+        all_top["member"].cast(pl.Utf8).to_list(),
+    ))
+    streak_map: dict[str, int] = {}
+    past_dates = [d for d in all_dates if d <= anchor]
+    for m in {mm for (dd, mm) in top_pairs if dd == str(anchor)}:
+        streak = 0
+        for d in reversed(past_dates):
+            if (str(d), m) in top_pairs:
+                streak += 1
+            else:
+                break
+        streak_map[m] = streak
+
+    # 每日 top_n 的 (date, rank) → cell
+    cell_by_key: dict[tuple, dict] = {}
+    prev_date = dates[-2] if len(dates) >= 2 else None
+    prev_members = set()
+    if prev_date:
+        prev_members = set(
+            all_top.filter(pl.col("date") == prev_date)["member"].cast(pl.Utf8).to_list()
+        )
+    for r in sub.to_dicts():
+        member = str(r.get("member") or "")
+        leader_sym = str(r.get("leader_symbol") or "")
+        cell_by_key[(str(r["date"]), int(r["rank"]))] = {
+            "member": member,
+            "score": round(float(r.get("score") or 0.0), 1),
+            "limit_up_count": int(r.get("limit_up_count") or 0),
+            "max_boards": int(r.get("max_boards") or 0),
+            "leader_symbol": leader_sym,
+            "leader_name": _name_of(leader_sym, name_map),
+            "streak": streak_map.get(member, 1),
+            "is_new": bool(prev_date and member not in prev_members),
+        }
+
+    rows = []
+    for rank in range(1, top_n + 1):
+        rows.append({
+            "rank": rank,
+            "cells": [cell_by_key.get((str(d), rank)) for d in dates],
+        })
+
+    # 题材汇总: 近 days 日上榜次数 / 最好名次 / 当前 streak / 最新分
+    agg = (sub.group_by("member")
+           .agg(pl.len().alias("days_on"), pl.col("rank").min().alias("best_rank"))
+           .sort(["days_on", "best_rank"], descending=[True, False]))
+    latest_cells = {c["member"]: c for c in
+                    (cell_by_key.get((str(anchor), rk)) for rk in range(1, top_n + 1))
+                    if c}
+    member_summary = []
+    for r in agg.to_dicts():
+        m = str(r["member"])
+        cur = latest_cells.get(m)
+        member_summary.append({
+            "member": m,
+            "days_on": int(r["days_on"]),
+            "best_rank": int(r["best_rank"]),
+            "streak": streak_map.get(m, 0),
+            "latest_score": cur["score"] if cur else None,
+        })
+
+    return {
+        "kind": kind,
+        "top_n": top_n,
+        "dates": [str(d) for d in dates],
+        "rows": rows,
+        "member_summary": member_summary,
+        "note": MEMBERSHIP_NOTE,
+    }
+
+
 # ────────────────────────────────────────────────────────────────
 # 2. 主线转换嗅探(确定性规则版)
 # ────────────────────────────────────────────────────────────────

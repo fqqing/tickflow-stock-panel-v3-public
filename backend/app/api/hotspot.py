@@ -16,6 +16,15 @@ def mainline_panorama(request: Request, top_n: int = Query(8, ge=1, le=20),
     return market_hotspot.build_mainline_panorama(repo, top_n=top_n, kind=kind)
 
 
+@router.get("/mainline-calendar")
+def mainline_calendar(request: Request, days: int = Query(30, ge=5, le=90),
+                      top_n: int = Query(8, ge=3, le=15),
+                      kind: str = Query("concept")):
+    """板块周期表: 往日每日主线排行 → 日期 × 名次矩阵(含连续上榜天数/新晋标记)。"""
+    repo = request.app.state.repo
+    return market_hotspot.build_mainline_calendar(repo, days=days, top_n=top_n, kind=kind)
+
+
 @router.get("/rotation")
 def rotation_sniff(request: Request, days: int = Query(12, ge=7, le=30),
                    kind: str = Query("concept")):

@@ -7,10 +7,12 @@
  *   - flash-summary:东财 7x24 快讯按题材聚类 + 关联个股
  */
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, Route as RouteIcon, TrendingUp, TrendingDown, Crown, Flame, Newspaper, Repeat } from 'lucide-react'
+import { useState } from 'react'
+import { Loader2, Route as RouteIcon, TrendingUp, TrendingDown, Crown, Flame, Newspaper, Repeat, CalendarDays } from 'lucide-react'
 import {
   api,
   type RotationSniff,
+  type MainlineCalendarCell,
 } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
 import { priceColorClass } from '@/lib/format'
@@ -173,18 +175,129 @@ function FlashHotspotView() {
   )
 }
 
+function cellTitle(c: MainlineCalendarCell): string {
+  return [
+    c.member,
+    `主线分 ${c.score}`,
+    `涨停 ${c.limit_up_count} 家 · 最高 ${c.max_boards} 板`,
+    c.leader_name ? `龙头 ${c.leader_name}` : '',
+    c.streak > 1 ? `连续上榜 ${c.streak} 天` : '',
+  ].filter(Boolean).join('\n')
+}
+
+/** 主线分(0-100) → 红色热力(红涨配色): 分越高底色越浓 */
+function cellBg(score: number): string {
+  const alpha = (0.05 + Math.min(Math.max(score, 0), 100) / 100 * 0.45).toFixed(3)
+  return `rgba(239, 68, 68, ${alpha})`
+}
+
+function MainlineCalendarView() {
+  const [days, setDays] = useState(30)
+  const [kind, setKind] = useState<'concept' | 'industry'>('concept')
+  const q = useQuery({
+    queryKey: ['hotspot-mainline-calendar', days, kind],
+    queryFn: () => api.mainlineCalendar(days, 8, kind),
+  })
+  if (q.isLoading) return <div className="flex items-center gap-2 text-sm text-muted"><Loader2 className="h-4 w-4 animate-spin" />周期表加载中…</div>
+  if (q.isError) return <div className="text-sm text-muted">周期表加载失败</div>
+  const d = q.data
+  if (!d || !d.dates.length) return <div className="text-sm text-muted">暂无主线历史 — 请先在「市场环境」页重算主线。</div>
+  const dateLabel = (iso: string) => iso.slice(5).replace('-', '/')
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+        <span>往日每日主线排行 · 近 {d.dates.length} 个交易日{d.note ? ` · ${d.note}` : ''}</span>
+        <span className="flex-1" />
+        {([10, 20, 30] as const).map(n => (
+          <button key={n} onClick={() => setDays(n)}
+            className={cn('rounded px-1.5 py-0.5', days === n ? 'bg-red-500/20 font-semibold text-red-400' : 'text-muted hover:text-foreground')}>
+            {n}日
+          </button>
+        ))}
+        <span className="mx-1 h-3 w-px bg-border" />
+        {(['concept', 'industry'] as const).map(k => (
+          <button key={k} onClick={() => setKind(k)}
+            className={cn('rounded px-1.5 py-0.5', kind === k ? 'bg-amber-500/20 font-semibold text-amber-400' : 'text-muted hover:text-foreground')}>
+            {k === 'concept' ? '概念' : '行业'}
+          </button>
+        ))}
+      </div>
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="bg-card">
+              <th className="sticky left-0 z-10 border-b border-r border-border bg-card px-2 py-1.5 text-left font-medium text-muted">名次</th>
+              {d.dates.map(dt => (
+                <th key={dt} className={cn('border-b border-border px-1.5 py-1.5 font-medium text-muted whitespace-nowrap',
+                  dt === d.dates[d.dates.length - 1] && 'text-red-400')}>
+                  {dateLabel(dt)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {d.rows.map(row => (
+              <tr key={row.rank}>
+                <td className="sticky left-0 z-10 border-b border-r border-border bg-card px-2 py-1 whitespace-nowrap">
+                  <span className={cn('font-semibold', row.rank <= 3 ? 'text-red-400' : 'text-muted')}>第{row.rank}名</span>
+                </td>
+                {row.cells.map((c, i) => (
+                  <td key={i} className="border-b border-border p-0.5 align-top">
+                    {c ? (
+                      <div title={cellTitle(c)}
+                        style={{ backgroundColor: cellBg(c.score) }}
+                        className="relative min-w-[5.5rem] rounded-sm px-1.5 py-1">
+                        <div className="flex items-start justify-between gap-1">
+                          <span className="line-clamp-2 leading-tight font-medium">{c.member}</span>
+                          {c.streak >= 3 && <span className="shrink-0 rounded bg-amber-500/25 px-0.5 text-[10px] leading-4 font-semibold text-amber-500">×{c.streak}</span>}
+                          {c.is_new && <span className="shrink-0 rounded bg-red-500/30 px-0.5 text-[10px] leading-4 text-red-400">新</span>}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted">
+                          <span>{c.score}</span>
+                          {c.max_boards > 0 && <span className="text-red-400">{c.max_boards}板</span>}
+                        </div>
+                      </div>
+                    ) : <div className="min-h-[2.1rem]" />}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {d.member_summary.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted">近{d.dates.length}日霸榜:</span>
+          {d.member_summary.slice(0, 8).map(s => (
+            <span key={s.member} className="inline-flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-xs">
+              <span className="font-medium">{s.member}</span>
+              <span className="text-muted">{s.days_on}天</span>
+              {s.streak >= 3 && <span className="text-amber-500">连{s.streak}</span>}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Mainline() {
   return (
     <div className="flex h-full flex-col">
       <PageHeader
         title="主线"
-        subtitle="主线梯队全景 · 转换嗅探 · 今日热点（纯增量缝合，复用已有数据资产）"
+        subtitle="板块周期表 · 主线梯队全景 · 转换嗅探 · 今日热点（纯增量缝合，复用已有数据资产）"
         titleExtra={<RouteIcon className="h-4 w-4 text-muted" />}
       />
-      <div className="grid flex-1 gap-4 overflow-auto p-4 md:grid-cols-2 xl:grid-cols-3">
-        <Card title="主线梯队全景" icon={<Crown className="h-4 w-4" />}><MainlinePanoramaView /></Card>
-        <Card title="主线转换嗅探" icon={<Repeat className="h-4 w-4" />}><RotationSniffView /></Card>
-        <Card title="快报 · 今日热点" icon={<Newspaper className="h-4 w-4" />}><FlashHotspotView /></Card>
+      <div className="flex-1 space-y-4 overflow-auto p-4">
+        <Card title="板块周期表（往日主线 30 天）" icon={<CalendarDays className="h-4 w-4" />}>
+          <MainlineCalendarView />
+        </Card>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <Card title="主线梯队全景" icon={<Crown className="h-4 w-4" />}><MainlinePanoramaView /></Card>
+          <Card title="主线转换嗅探" icon={<Repeat className="h-4 w-4" />}><RotationSniffView /></Card>
+          <Card title="快报 · 今日热点" icon={<Newspaper className="h-4 w-4" />}><FlashHotspotView /></Card>
+        </div>
       </div>
     </div>
   )
