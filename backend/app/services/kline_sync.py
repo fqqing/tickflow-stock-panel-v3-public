@@ -177,29 +177,44 @@ def sync_and_persist_daily_batch(
     if provider_name != "tickflow":
         from app.data_providers import custom as custom_sources
         if custom_sources.provider_has_dataset(provider_name, "daily"):
-            provider = custom_sources.get_provider(provider_name)
             end_time = end_date or datetime.now()
             days = count or 365
             start_time = start_date or (end_time - timedelta(days=days))
-            df = provider.get_daily(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                on_chunk_done=on_chunk_done,
-            )
-            if df.is_empty():
-                return 0
-            repo.append_daily(df)
+            df = None
             try:
-                d = repo.store.data_dir.as_posix()
-                repo.db.execute(
-                    f"""CREATE OR REPLACE VIEW kline_daily AS
-                        SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)"""
+                provider = custom_sources.get_provider(provider_name)
+                df = provider.get_daily(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    on_chunk_done=on_chunk_done,
                 )
             except Exception as e:  # noqa: BLE001
-                logger.warning("refresh view failed: %s", e)
-            return df.height
-        # 自定义源未配置 daily → 回退 TickFlow
+                logger.warning(
+                    "自定义日K源 %s 拉取失败, 回退 TickFlow: %s", provider_name, e)
+            # 脏数据防御: 缺关键列(如 date)时 append 必崩, 视为失败走回退
+            required = {"symbol", "date", "open", "high", "low", "close"}
+            if df is not None:
+                missing = required - set(df.columns)
+                if missing:
+                    logger.warning(
+                        "自定义日K源 %s 返回缺列 %s, 回退 TickFlow",
+                        provider_name, sorted(missing))
+                    df = None
+            if df is not None and not df.is_empty():
+                repo.append_daily(df)
+                try:
+                    d = repo.store.data_dir.as_posix()
+                    repo.db.execute(
+                        f"""CREATE OR REPLACE VIEW kline_daily AS
+                            SELECT * FROM read_parquet('{d}/kline_daily/**/*.parquet', union_by_name=true)"""
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("refresh view failed: %s", e)
+                return df.height
+            if df is not None and df.is_empty():
+                return 0
+        # 自定义源未配置 daily / 拉取失败 → 回退 TickFlow
 
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
@@ -381,35 +396,46 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     if provider_name != "tickflow":
         from app.data_providers import custom as custom_sources
         if custom_sources.provider_has_dataset(provider_name, "adj_factor"):
-            provider = custom_sources.get_provider(provider_name)
-            new_data = provider.get_adj_factors(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                asset_type=asset_type,
-                on_chunk_done=on_chunk_done,
-            )
-            if new_data.is_empty():
+            new_data = None
+            try:
+                provider = custom_sources.get_provider(provider_name)
+                new_data = provider.get_adj_factors(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    asset_type=asset_type,
+                    on_chunk_done=on_chunk_done,
+                )
+                # 脏数据防御: 缺关键列时合并/回写必崩, 视为失败走回退
+                if new_data is not None and {"symbol", "trade_date"} - set(new_data.columns):
+                    logger.warning(
+                        "自定义除权源 %s 返回缺列, 回退 TickFlow", provider_name)
+                    new_data = None
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "自定义除权源 %s 拉取失败, 回退 TickFlow: %s", provider_name, e)
+            if new_data is not None and not new_data.is_empty():
+                # 首次写入时没有可比对的旧值, 拉回来的全部算受影响
+                affected = new_data["symbol"].unique().to_list()
+                factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
+                out = repo.store.data_dir / factor_dir / "all.parquet"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                if out.exists():
+                    existing = pl.read_parquet(out)
+                    before = existing.height
+                    # maintain_order=True: keep="last" 才确定是新数据(见 _write_minute_partition 注释)
+                    merged = pl.concat([existing, new_data]).unique(
+                        subset=["symbol", "trade_date"], keep="last", maintain_order=True,
+                    ).sort(["symbol", "trade_date"])
+                    # 只有真正新增/变更的行对应的 symbol 才需要 enriched 重算
+                    affected = _diff_affected_symbols(existing, merged)
+                    _atomic_write_parquet(merged, out)
+                    return merged.height - before, affected
+                _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
+                return new_data.height, affected
+            if new_data is not None and new_data.is_empty():
                 return 0, []
-            # 首次写入时没有可比对的旧值, 拉回来的全部算受影响
-            affected = new_data["symbol"].unique().to_list()
-            factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
-            out = repo.store.data_dir / factor_dir / "all.parquet"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            if out.exists():
-                existing = pl.read_parquet(out)
-                before = existing.height
-                # maintain_order=True: keep="last" 才确定是新数据(见 _write_minute_partition 注释)
-                merged = pl.concat([existing, new_data]).unique(
-                    subset=["symbol", "trade_date"], keep="last", maintain_order=True,
-                ).sort(["symbol", "trade_date"])
-                # 只有真正新增/变更的行对应的 symbol 才需要 enriched 重算
-                affected = _diff_affected_symbols(existing, merged)
-                _atomic_write_parquet(merged, out)
-                return merged.height - before, affected
-            _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
-            return new_data.height, affected
-        # 自定义源未配置 adj_factor → 回退 TickFlow
+        # 自定义源未配置 adj_factor / 拉取失败 → 回退 TickFlow
 
     if not capset.has(Cap.ADJ_FACTOR):
         return 0, []

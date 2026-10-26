@@ -52,6 +52,48 @@ def _pool_cache_path(pool_id: str) -> Path:
     return settings.data_dir / "pools" / f"{pool_id}.parquet"
 
 
+def _local_equity_a_symbols() -> list[str]:
+    """从本地 instruments 维表枚举全 A (沪深京), 作为 TickFlow 拉不到时的兜底。
+
+    Free 模式/任意第三方数据源下, tickflow quotes.get_by_universes 会 403,
+    标的池不应因此为空 —— 维表由管道维护, 与面板口径一致。
+    """
+    import polars as pl  # 局部导入避免模块加载顺序问题
+
+    path = settings.data_dir / "instruments" / "instruments.parquet"
+    if not path.exists():
+        return []
+    try:
+        df = pl.read_parquet(path, columns=["symbol"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取本地 instruments 维表失败: %s", e)
+        return []
+    syms = sorted({
+        s.strip() for s in df["symbol"].cast(pl.Utf8).to_list()
+        if s and s.strip().endswith((".SH", ".SZ", ".BJ"))
+    })
+    if syms:
+        logger.info("CN_Equity_A 兜底: 本地维表枚举 %d 只 A 股", len(syms))
+    return syms
+
+
+def _local_index_symbols() -> list[str]:
+    """从本地 instruments_index 维表枚举指数, 作为 CN_Index 兜底。"""
+    import polars as pl
+
+    paths = list((settings.data_dir / "instruments_index").glob("**/*.parquet")) \
+        if (settings.data_dir / "instruments_index").exists() else []
+    out: list[str] = []
+    for path in paths:
+        try:
+            df = pl.read_parquet(path, columns=["symbol"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("读取本地指数维表失败 %s: %s", path.name, e)
+            continue
+        out.extend(s.strip() for s in df["symbol"].cast(pl.Utf8).to_list() if s and s.strip())
+    return sorted(set(out))
+
+
 def get_pool(pool_id: PoolId, refresh: bool = False) -> list[str]:
     """返回标的池里的 symbol 列表。"""
     if pool_id == "watchlist":
@@ -119,6 +161,11 @@ def _fetch_pool(pool_id: PoolId) -> list[str]:
             except Exception as e:  # noqa: BLE001
                 logger.warning("aggregate SW1 fetch failed: %s", e)
 
+        # 终极兜底: 本地 instruments 维表 (免费模式/tickflow 不可用时标的池不再为空)
+        local = _local_equity_a_symbols()
+        if local:
+            return local
+
     if pool_id == "CN_Index":
         uid = _find_universe_id(["CN_Index", "沪深指数", "指数"])
         ids = [uid] if uid else ["CN_Index"]
@@ -128,6 +175,12 @@ def _fetch_pool(pool_id: PoolId) -> list[str]:
                 return sorted(set(df["symbol"].astype(str).tolist()))
         except Exception as e:  # noqa: BLE001
             logger.warning("fetch CN_Index via universe %s failed: %s", ids, e)
+
+        # 兜底: 本地指数维表
+        local_idx = _local_index_symbols()
+        if local_idx:
+            logger.info("CN_Index 兜底: 本地维表枚举 %d 只指数", len(local_idx))
+            return local_idx
 
     return []
 

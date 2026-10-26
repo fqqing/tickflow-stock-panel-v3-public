@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -961,6 +962,20 @@ def _wait_for_idle_slot(job_store, job_label: str) -> bool:
     return True
 
 
+def _accepts_on_progress(fn: Callable) -> bool:
+    """判断任务函数是否接收 on_progress kwarg。
+
+    注册进调度器的任务形态不一(管道任务接收 on_progress, daily_picks 等轻任务
+    早期版本不接收)。统一强传会让不接收的任务在调度触发时必然 TypeError ——
+    且发生在盘后黄金窗口, 任务历史里只留下一条 failed。按签名判定后,
+    新增任务无论哪种形态都能安全注册。
+    """
+    try:
+        return "on_progress" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _run_tracked(fn, job_label: str) -> bool:
     """调度触发时包装 JobStore 跟踪，确保同步历史有记录。
 
@@ -1000,7 +1015,10 @@ def _run_tracked(fn, job_label: str) -> bool:
     succeeded = False
     try:
         job_store.start(job_id)
-        result = fn(on_progress=progress)
+        if _accepts_on_progress(fn):
+            result = fn(on_progress=progress)
+        else:
+            result = fn()
         job_store.succeed(job_id, result)
         succeeded = True
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
@@ -1302,14 +1320,17 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         pick_minute -= 60
         pick_hour += 1
 
-    def _daily_picks_job():
+    def _daily_picks_job(on_progress: Callable | None = None):
+        emit = on_progress or (lambda *a, **k: None)
         app_state = _get_app_state()
         svc = getattr(app_state, "daily_picks_service", None)
         if svc is None:
             logger.warning("daily_picks job skipped: service 未初始化")
             return {"picks": 0}
         try:
+            emit("daily_picks", 10, "开始盘后精选")
             rows = svc.run()
+            emit("daily_picks", 100, f"精选完成: {len(rows)} 条")
             return {"picks": len(rows)}
         except Exception as e:  # noqa: BLE001
             logger.exception("daily_picks job failed: %s", e)
@@ -1335,14 +1356,17 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         settle_minute -= 60
         settle_hour += 1
 
-    def _daily_picks_settle_job():
+    def _daily_picks_settle_job(on_progress: Callable | None = None):
+        emit = on_progress or (lambda *a, **k: None)
         app_state = _get_app_state()
         svc = getattr(app_state, "daily_picks_service", None)
         if svc is None:
             logger.warning("daily_picks_settle job skipped: service 未初始化")
             return {"settled": 0}
         try:
+            emit("daily_picks_settle", 10, "开始盘后结算")
             settled = svc.settle_pending()
+            emit("daily_picks_settle", 100, f"结算完成: {settled} 笔")
             return {"settled": settled}
         except Exception as e:  # noqa: BLE001
             logger.exception("daily_picks_settle job failed: %s", e)
