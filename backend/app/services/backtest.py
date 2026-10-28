@@ -155,8 +155,14 @@ class BacktestService:
             return pd.DataFrame()
 
         # 即时计算指标 + 信号
+        # A 股回测传入 instruments, 触发 compute_limit_signals 计算涨跌停信号
+        # (signal_limit_up/down), 供撮合阶段的涨跌停约束过滤使用。
         from app.indicators.pipeline import compute_all
-        df = compute_all(df)
+        if asset_type == "stock":
+            instruments = self.repo.get_instruments_asset("stock")
+            df = compute_all(df, instruments) if not instruments.is_empty() else compute_all(df)
+        else:
+            df = compute_all(df)
 
         # 选择需要的列
         needed_cols = [
@@ -168,6 +174,7 @@ class BacktestService:
             "signal_n_day_high", "signal_n_day_low",
             "signal_boll_breakout_upper", "signal_boll_breakdown_lower",
             "signal_volume_surge",
+            "signal_limit_up", "signal_limit_down",
         ]
         existing = [c for c in needed_cols if c in df.columns]
         df = df.select(existing)
@@ -255,6 +262,31 @@ class BacktestService:
             price = panel.pivot(index="date", columns="symbol", values="open")
         else:
             price = close
+
+        # 涨跌停约束(A 股): 一字涨停买不进、一字跌停卖不出。
+        # 口径与矩阵引擎 _can_buy/_can_sell 的 _one_price_limit 一致:
+        # 涨停锁定(signal_limit_up) 且 OHLC 几乎相等(全天封死) 才真正无法成交;
+        # 盘中触及涨停但开板(非一字)仍可成交, 不误杀。
+        if config.asset_type == "stock" and "signal_limit_up" in panel.columns:
+            limit_up = panel.pivot(index="date", columns="symbol", values="signal_limit_up")
+            limit_down = panel.pivot(index="date", columns="symbol", values="signal_limit_down")
+            high_m = panel.pivot(index="date", columns="symbol", values="high")
+            low_m = panel.pivot(index="date", columns="symbol", values="low")
+            one_price = (high_m - low_m) <= np.maximum(close.abs() * 1e-4, 0.01)
+            limit_up = limit_up.reindex_like(close).fillna(False).astype(bool)
+            limit_down = limit_down.reindex_like(close).fillna(False).astype(bool)
+            one_price = one_price.reindex_like(close).fillna(False).astype(bool)
+            entries = entries & ~(limit_up & one_price)
+            exits = exits & ~(limit_down & one_price)
+            if not entries.any().any():
+                return BacktestResult(
+                    run_id=run_id,
+                    config=_config_to_dict(config),
+                    stats={"error": "no buy signals (after price-limit filter)"},
+                    equity_curve=[],
+                    trades=[],
+                    per_symbol_stats=[],
+                )
 
         # 跑回测
         try:
