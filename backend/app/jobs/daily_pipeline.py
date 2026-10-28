@@ -1438,6 +1438,35 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
+    # 盘后主线原因预热: pipeline 落盘 mainline_history 后, 提前把当天主线原因
+    # (含 LLM 归纳)算好落盘到 data/mainline_reason/, 接口读盘即毫秒级返回,
+    # 消除每天首个访问者的 LLM 冷启动(否则 8 条主线并行调 LLM ~11s)。
+    # 放 strategy_push 之后 5 分钟, 此时主线/enriched/同花顺涨停池均已就绪。
+    warm_hour = push_hour
+    warm_minute = push_minute + 5
+    if warm_minute >= 60:
+        warm_minute -= 60
+        warm_hour += 1
+
+    async def _warm_mainline_reason_job(repo_arg):
+        from app.services import market_hotspot
+        for _kind in ("concept", "industry"):
+            try:
+                await market_hotspot.build_mainline_reason(repo_arg, kind=_kind)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("warm mainline_reason %s failed: %s", _kind, e)
+
+    scheduler.add_job(
+        _warm_mainline_reason_job,
+        args=[repo],
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=warm_hour, minute=warm_minute,
+                            timezone="Asia/Shanghai"),
+        id="warm_mainline_reason",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
     # 盘后: 五档盘口 sealed 定版(时间由偏好决定, 默认15:02, 范围15:01~18:00)
     depth_sched = preferences.get_depth_finalize_time()
 

@@ -24,6 +24,7 @@ import hashlib
 import logging
 import time
 from datetime import date, timedelta
+from pathlib import Path
 
 import polars as pl
 
@@ -852,6 +853,18 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
     if hit and time.time() - hit[0] < _REASON_TTL:
         return hit[1]
 
+    # 磁盘持久化缓存: 盘后预热落盘后, 容器重启/每天首个访问者也毫秒级命中, 免 8 次 LLM 冷启动。
+    disk_path = Path(data_dir) / "mainline_reason" / f"{kind}_{str(latest)}.json"
+    if disk_path.exists():
+        try:
+            import json as _json
+            cached = _json.loads(disk_path.read_text(encoding="utf-8"))
+            if cached.get("fp") == fp and isinstance(cached.get("result"), dict):
+                _REASON_CACHE[fp] = (time.time(), cached["result"])
+                return cached["result"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mainline_reason disk cache read failed: %s", e)
+
     name_map = _load_name_map(data_dir)
     map_df, _ = _load_concept_map_df(repo, kind)
 
@@ -942,6 +955,17 @@ async def build_mainline_reason(repo, top_n: int = 8, kind: str = "concept",
     if len(_REASON_CACHE) > _REASON_CACHE_MAX:
         oldest = min(_REASON_CACHE, key=lambda k: _REASON_CACHE[k][0])
         _REASON_CACHE.pop(oldest, None)
+    # 落盘: 供盘后预热持久化, 容器重启后接口读盘即可毫秒级返回。
+    try:
+        import json as _json
+        disk_dir = Path(data_dir) / "mainline_reason"
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        (disk_dir / f"{kind}_{str(latest)}.json").write_text(
+            _json.dumps({"fp": fp, "result": result}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("mainline_reason disk cache write failed: %s", e)
     return result
 
 
