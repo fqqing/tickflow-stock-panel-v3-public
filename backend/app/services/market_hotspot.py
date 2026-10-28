@@ -577,53 +577,6 @@ async def build_flash_hotspot(repo, size: int = 60, top_n: int = 12,
 # 4. 东财板块榜(对比源) + 主线原因
 # ────────────────────────────────────────────────────────────────
 
-_EM_PLATE_URL = "https://push2.eastmoney.com/api/qt/clist/get"
-_EM_PLATE_CACHE: dict[str, tuple[float, dict]] = {}
-_EM_PLATE_TTL = 120.0
-
-
-def _fetch_em_boards(kind: str = "concept") -> dict[str, dict]:
-    """拉东财板块榜(概念/行业)。返回 {BK代码: {name, change_pct, leader_name, up, down}}。
-
-    fs: m:90+t:3 = 概念板块, m:90+t:2 = 行业板块; fid=f3 按涨跌幅降序。
-    单次 pz=800 拉全量(概念约 500+ / 行业约 90), 云端直连免 key。
-    """
-    import httpx
-
-    key = kind
-    hit = _EM_PLATE_CACHE.get(key)
-    if hit and time.time() - hit[0] < _EM_PLATE_TTL:
-        return hit[1]
-
-    fs = "m:90+t:3" if kind == "concept" else "m:90+t:2"
-    url = (_EM_PLATE_URL + f"?pn=1&pz=800&po=1&np=1&fltt=2&invt=2&fid=f3&fs={fs}"
-           "&fields=f2,f3,f8,f12,f14,f104,f105,f128,f136")
-    try:
-        data = httpx.get(url, timeout=12.0,
-                         headers={"User-Agent": "Mozilla/5.0",
-                                  "Referer": "https://quote.eastmoney.com/"}).json()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("em board fetch failed: %s", e)
-        return {}
-
-    rows = ((data.get("data") or {}).get("diff")) or []
-    out: dict[str, dict] = {}
-    for r in rows:
-        code = str(r.get("f12") or "").strip()
-        name = str(r.get("f14") or "").strip()
-        if not code:
-            continue
-        out[code] = {
-            "name": name,
-            "change_pct": float(r.get("f3") or 0.0),
-            "leader_name": str(r.get("f128") or "").strip(),
-            "up": int(r.get("f104") or 0),
-            "down": int(r.get("f105") or 0),
-        }
-    _EM_PLATE_CACHE[key] = (time.time(), out)
-    return out
-
-
 def _normalize_plate_name(name: str) -> str:
     """板块名归一化: 去空格 + 去「概念/板块/指数」后缀, 用于跨源名称对齐。"""
     n = (name or "").strip().replace(" ", "")
@@ -631,33 +584,6 @@ def _normalize_plate_name(name: str) -> str:
         if n.endswith(suf) and len(n) > len(suf) + 1:
             n = n[: -len(suf)]
     return n
-
-
-def _build_em_boards_mapping(em_boards: dict[str, dict],
-                             concept_names: list[str]) -> tuple[dict[str, str], dict[str, str]]:
-    """东财板块 ↔ 本地概念名 双向映射(归一化子串匹配, 长名优先)。
-
-    返回 (em_to_ours: {BK代码: 概念名}, ours_to_em: {概念名: BK代码})。
-    """
-    em_to_ours: dict[str, str] = {}
-    ours_to_em: dict[str, str] = {}
-    ours_sorted = sorted(set(concept_names), key=len, reverse=True)
-    norm_ours = {_normalize_plate_name(c): c for c in ours_sorted}
-    for bk, info in em_boards.items():
-        norm_em = _normalize_plate_name(info.get("name") or "")
-        if not norm_em:
-            continue
-        target = norm_ours.get(norm_em)
-        if target is None:
-            for c in ours_sorted:
-                nc = _normalize_plate_name(c)
-                if nc and len(nc) >= 2 and (nc in norm_em or norm_em in nc):
-                    target = c
-                    break
-        if target:
-            em_to_ours[bk] = target
-            ours_to_em.setdefault(target, bk)
-    return em_to_ours, ours_to_em
 
 
 def _match_name_to_ours(src_names: list[str],
