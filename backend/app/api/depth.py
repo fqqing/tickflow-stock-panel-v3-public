@@ -16,18 +16,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/depth", tags=["depth"])
 
 
-def _get_depth_provider():
-    """盘口 provider: 优先 stock-sdk(完整五档), 无则腾讯(qt)兜底。
+def _iter_depth_providers():
+    """按优先级产出可用的盘口 provider。
 
-    stock-sdk 抓取第三方财经网站接口, 存在合规风险且 Docker 默认不打包,
-    故国内部署时通常不可用; 腾讯 qt.gtimg.cn 免费且含五档, 作为兜底。
+    注意与「返回第一个存在的 provider」的区别: stocksdk(东财) 在云端常驻
+    IP 风控 —— provider 存在但 get_depth 恒返回空列表, 若只按存在性挑一个
+    就永远轮不到腾讯兜底 (线上实测 /api/depth 404「未获取到盘口数据」即此因)。
+    这里产出全部候选, 由调用方逐个尝试、拿到数据才算命中。
     """
     for name in ("stocksdk", "tencent"):
         try:
-            return custom_loader.get_provider(name)
-        except Exception as e:
+            p = custom_loader.get_provider(name)
+        except Exception as e:  # noqa: BLE001
             logger.debug("%s provider 不可用: %s", name, e)
-    return None
+            continue
+        if p is not None and hasattr(p, "get_depth"):
+            yield name, p
 
 
 def _normalize_depth_row(row: dict) -> dict[str, Any]:
@@ -90,16 +94,31 @@ def get_depth(symbol: str) -> dict:
 
     返回: 最新价, 涨跌, 五档 bid/ask, 委比委差, 换手率, 市值等.
     """
-    provider = _get_depth_provider()
-    if provider is None:
+    # 库内/前端入口 symbol 格式不统一(裸 000001 vs 000001.SZ), 腾讯 qt 源
+    # 只认带后缀格式(app_to_qt 对裸代码返回 None), 入口统一归一化。
+    try:
+        from app.markets import normalize_symbol
+
+        symbol = normalize_symbol(symbol)
+    except Exception:  # noqa: BLE001
+        pass
+    providers = list(_iter_depth_providers())
+    if not providers:
         raise HTTPException(
             status_code=503,
             detail="盘口数据源不可用(需 stock-sdk 或腾讯插件)",
         )
-    rows = provider.get_depth([symbol])
-    if not rows:
-        raise HTTPException(status_code=404, detail=f"未获取到 {symbol} 的盘口数据")
-    return _normalize_depth_row(rows[0])
+    last_err: Exception | None = None
+    for name, provider in providers:
+        try:
+            rows = provider.get_depth([symbol])
+        except Exception as e:  # noqa: BLE001
+            logger.debug("depth provider %s 失败: %s", name, e)
+            last_err = e
+            continue
+        if rows:
+            return _normalize_depth_row(rows[0])
+    raise HTTPException(status_code=404, detail=f"未获取到 {symbol} 的盘口数据") from last_err
 
 
 @router.get("/batch")
@@ -107,8 +126,8 @@ def get_depth_batch(
     symbols: str = Query(..., description="逗号分隔的股票代码, 如 600519.SH,000001.SZ"),
 ) -> dict:
     """批量查询多只股票五档盘口."""
-    provider = _get_depth_provider()
-    if provider is None:
+    providers = list(_iter_depth_providers())
+    if not providers:
         raise HTTPException(
             status_code=503,
             detail="盘口数据源不可用(需 stock-sdk 或腾讯插件)",
@@ -116,5 +135,18 @@ def get_depth_batch(
     syms = [s.strip() for s in symbols.split(",") if s.strip()]
     if not syms:
         raise HTTPException(status_code=400, detail="symbols 不能为空")
-    rows = provider.get_depth(syms)
-    return {row["symbol"]: _normalize_depth_row(row) for row in rows}
+    try:
+        from app.markets import normalize_symbol
+
+        syms = [normalize_symbol(s) for s in syms]
+    except Exception:  # noqa: BLE001
+        pass
+    for name, provider in providers:
+        try:
+            rows = provider.get_depth(syms)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("depth provider %s 批量失败: %s", name, e)
+            continue
+        if rows:
+            return {row["symbol"]: _normalize_depth_row(row) for row in rows}
+    return {}

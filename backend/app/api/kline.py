@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.market_time import cn_now, cn_today
-from app.markets import ALL_MARKETS, market_of
+from app.markets import ALL_MARKETS, market_of, normalize_symbol
 from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.db_safe import is_valid_ext_ident
 from app.services import kline_sync
@@ -408,6 +408,20 @@ def _prev_close_with_fallback(
     return values, sources
 
 
+def _norm_sym(symbol: str) -> str:
+    """读接口入口的 symbol 归一化。
+
+    库内日K/分钟K 全部按 ``000001.SZ`` 带后缀格式存储, 而前端部分入口(看板
+    实时行情列表、URL 直达 /stock/000001 等)传的是裸代码, 直接按原样过滤
+    parquet 恒返回空 rows → 日K终端「暂无该周期数据」。统一在 API 层归一化,
+    兼容两种写法; 已带后缀的原样返回, 不影响任何既有调用方。
+    """
+    try:
+        return normalize_symbol(symbol)
+    except Exception:  # noqa: BLE001
+        return symbol
+
+
 def _resolve_market(symbol: str, market: str) -> str:
     """确定标的市场: 显式传参优先, 留空则按 symbol 后缀推导.
 
@@ -536,6 +550,7 @@ def get_daily(
     """
     import polars as pl
 
+    symbol = _norm_sym(symbol)
     repo = request.app.state.repo
     market = _resolve_market(symbol, market)
     end = date.fromisoformat(end_date) if end_date else date.today()
@@ -1349,6 +1364,7 @@ def get_daily_batch(request: Request, body: dict):
     if not symbols:
         return {"data": {}}
     days = max(5, min(60, days))
+    symbols = [_norm_sym(s) for s in symbols]
 
     repo = request.app.state.repo
     import polars as pl
@@ -1417,6 +1433,7 @@ def get_minute_batch(request: Request, body: dict):
     trade_date_str: str | None = body.get("date")
     if not symbols:
         return {"data": {}}
+    symbols = [_norm_sym(s) for s in symbols]
 
     repo = request.app.state.repo
     capset = request.app.state.capabilities
@@ -1550,6 +1567,7 @@ def get_minute_range(
     """读取单只标的最近 N 个已落库交易日的分钟 K。"""
     import polars as pl
 
+    symbol = _norm_sym(symbol)
     repo = request.app.state.repo
     asset_type = repo.resolve_asset_type(symbol)
     stock_info = (
@@ -1738,6 +1756,7 @@ def get_minute_k(
             detail="unsupported period: {} (可选 {})".format(period, ",".join(_MINUTE_PERIODS)),
         )
     repo = request.app.state.repo
+    symbol = _norm_sym(symbol)
     asset_type = repo.resolve_asset_type(symbol)
     stock_info = (
         _get_stock_info(repo, symbol)
@@ -1793,6 +1812,7 @@ def get_minute(
     - 本地有完整数据(240条) → 直接返回
     - 本地无数据或不完整 → 从 TickFlow 实时拉取返回（不写入）
     """
+    symbol = _norm_sym(symbol)
     repo = request.app.state.repo
     asset_type = repo.resolve_asset_type(symbol)
     market = market_of(symbol)
