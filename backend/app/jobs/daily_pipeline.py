@@ -1485,6 +1485,36 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         replace_existing=True,
     )
 
+    # 盘后: 多周期分钟K(5m/15m/30m/60m)腾讯 mkline 增量补齐。
+    # free-stockdb 只导到 2026-09-29, 之后靠这里每日增量(腾讯 mkline 免 key,
+    # 无区间参数, 每周期固定拉最近 482 根: m5≈11交易日/m15≈22/m30≈60/m60≈120)。
+    # 落盘按日期去重覆盖(keep=last), 增量语义由同 symbol+datetime 去重保证。
+    def _minute_period_sync_job(on_progress: Callable | None = None):
+        emit = on_progress or (lambda *a, **k: None)
+        from app.services import kline_sync
+        freqs = ("5m", "15m", "30m", "60m")
+        total = 0
+        for i, freq in enumerate(freqs, start=1):
+            try:
+                emit("minute_period_sync", int(100 * (i - 1) / len(freqs)),
+                     f"拉取 {freq} 分钟K…")
+                n = kline_sync.sync_and_persist_minute_period(repo, freq=freq)
+                total += n
+                emit("minute_period_sync", int(100 * i / len(freqs)),
+                     f"{freq} 完成: {n} 行")
+            except Exception as e:  # noqa: BLE001
+                logger.exception("minute_period_sync %s failed: %s", freq, e)
+        return {"rows": total}
+
+    scheduler.add_job(
+        lambda: _run_tracked(_minute_period_sync_job, "minute_period_sync"),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=45,
+                            timezone="Asia/Shanghai"),
+        id="minute_period_sync",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
     # 港美股: 此前只能手动 POST /api/pipeline/run-market 触发, 没有 cron。
     # 实测后果: 2026-09-15 起 kline_daily 分区里港美股整天消失(只剩 A 股),
     # 因为没人手动点 —— 缺口是"没有定时"而不是"拉取失败"。按各自收盘时间补两个:

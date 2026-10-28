@@ -1181,3 +1181,94 @@ def sync_and_persist_minute(
 
     logger.info("minute K synced: %d rows (%d symbols)", written, len(symbols))
     return written
+
+
+def sync_and_persist_minute_period(
+    repo: KlineRepository,
+    freq: str = "30m",
+    symbols: list[str] | None = None,
+    on_chunk_done: Callable[[int, int], None] | None = None,
+    chunk: int = 250,
+) -> int:
+    """腾讯 mkline 多周期(5m/15m/30m/60m)分钟K增量补齐。
+
+    与 sync_and_persist_minute(1m) 的区别:
+      - 目标目录是 kline_minute_{freq}(free-stockdb 已导 2025-01~2026-09-29,
+        之后缺 10 月, 本函数用它补齐到最近)。
+      - 腾讯 mkline 无 start/end 区间参数, 固定返回最近 482 根(封顶):
+          m5 ≈ 11 交易日 / m15 ≈ 22 / m30 ≈ 60 / m60 ≈ 120。
+        故不传区间, 直接拉最近 482 根, 落盘时读旧 concat unique 覆盖(增量语义
+        由「同日期同 symbol 去重 keep=last」保证)。
+      - 分块拉取+流式落盘(每 chunk 只 concat 一次): 5m 全市场 265 万行若一次
+        concat 会占 ~4GB 内存, 云端 1.9G 直接 OOM。分块后峰值 = chunk×482 行。
+      - 北交所腾讯 mkline 不支持(回落 stocksdk 云端已弃用), 自动跳过。
+
+    返回写入行数。
+    """
+    from app.data_providers import custom as custom_sources
+
+    freq = str(freq or "").strip().lower()
+    period_dir = {
+        "5m": "kline_minute_5m",
+        "15m": "kline_minute_15m",
+        "30m": "kline_minute_30m",
+        "60m": "kline_minute_60m",
+    }
+    if freq not in period_dir:
+        logger.warning("sync_minute_period: 不支持的周期 %s", freq)
+        return 0
+    out_dir_name = period_dir[freq]
+
+    if symbols is None:
+        try:
+            inst = repo.get_instruments_asset("stock", market="cn")
+            symbols = inst["symbol"].to_list() if not inst.is_empty() else []
+        except Exception as e:  # noqa: BLE001
+            logger.warning("sync_minute_period: 读取 instruments 失败: %s", e)
+            return 0
+    # 腾讯 mkline 不支持北交所(回落 stocksdk 会桥接超时 180s 且云端已弃用), 直接剔除,
+    # 避免每块含北交所时卡死 180s。
+    symbols = [s for s in symbols if not str(s).upper().endswith(".BJ")]
+    if not symbols:
+        return 0
+
+    try:
+        provider = custom_sources.get_provider("tencent")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("sync_minute_period: tencent provider 不可用: %s", e)
+        return 0
+
+    minute_dir = repo.store.data_dir / out_dir_name
+    written = 0
+    nchunk = (len(symbols) + chunk - 1) // chunk
+    for ci in range(0, len(symbols), chunk):
+        batch = symbols[ci : ci + chunk]
+        try:
+            df = provider.get_minute(
+                batch, None, None, asset_type="stock", freq=freq,
+                on_chunk_done=on_chunk_done,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("sync_minute_period: 腾讯拉取失败(%s, 块 %d): %s",
+                           freq, ci // chunk + 1, e)
+            continue
+        if df is None or df.is_empty():
+            continue
+        with repo._write_lock:
+            written += _write_minute_partition(df, minute_dir)
+        logger.info("minute period %s chunk %d/%d: +%d rows",
+                    freq, ci // chunk + 1, nchunk, written)
+
+    if written > 0:
+        # 刷新该周期的 duckdb VIEW
+        try:
+            d = repo.store.data_dir.as_posix()
+            repo.db.execute(
+                f"""CREATE OR REPLACE VIEW {out_dir_name} AS
+                    SELECT * FROM read_parquet('{d}/{out_dir_name}/**/*.parquet', union_by_name=true)"""
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("refresh %s view failed: %s", out_dir_name, e)
+
+    logger.info("minute period %s synced: %d rows (%d symbols)", freq, written, len(symbols))
+    return written
