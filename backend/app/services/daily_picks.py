@@ -106,6 +106,7 @@ _SCHEMA: dict[str, "pl.DataType"] = {
     "entry_close": pl.Float64, "entry_date": pl.Utf8, "entry_price": pl.Float64,
     "exit_close": pl.Float64, "exit_date": pl.Utf8, "exit_reason": pl.Utf8, "max_high": pl.Float64,
     "pnl_pct": pl.Float64, "hit": pl.Boolean, "hold_days": pl.Int64, "created_at": pl.Utf8,
+    "entry_note": pl.Utf8,
 }
 
 #: picks.parquet 列顺序(固定, 保证空表时 schema 稳定)
@@ -114,7 +115,7 @@ _PICK_COLUMNS = [
     "signal_count", "family_count", "score", "strategy_hits", "family_hits",
     "entry_close", "entry_date", "entry_price",
     "exit_close", "exit_date", "exit_reason", "max_high",
-    "pnl_pct", "hit", "hold_days", "created_at",
+    "pnl_pct", "hit", "hold_days", "created_at", "entry_note",
 ]
 
 #: 飞书多维表格「每日精选」(lark-cli base +base-create 建立, 字段见 _to_lark_records)
@@ -391,6 +392,7 @@ class DailyPicksService:
                 "hit": None,
                 "hold_days": hold_days,
                 "created_at": created,
+                "entry_note": None,
             })
         # 回填 entry_close
         close_map = {str(r["symbol"]): r.get("close") for r in candidates.iter_rows(named=True)}
@@ -611,13 +613,17 @@ class DailyPicksService:
                         "exit_reason": info["exit_reason"],
                         "exit_date": info["entry_date"],
                         "max_high": None,
+                        "entry_note": info.get("note"),
                     }
                     continue
                 if info["entry_price"] is None:
                     continue  # T+1 数据未到, 保持 pending
                 entry_date = info["entry_date"]
                 entry_price = info["entry_price"]
-                updates[key] = {"entry_date": entry_date, "entry_price": entry_price}
+                updates[key] = {
+                    "entry_date": entry_date, "entry_price": entry_price,
+                    "entry_note": info.get("note"),
+                }
 
             # ── 2) 已买入 → 卖出扫描 ──
             res = self._scan_exit(sym, entry_date, entry_price, dates, today)
@@ -657,33 +663,40 @@ class DailyPicksService:
         return len(updates)
 
     def _entry_info(self, pick_date: str, symbol: str, entry_close: float | None, dates: list[str]) -> dict:
-        """智能买入判断。返回 {entry_date, entry_price, exit_reason}。
+        """智能买入判断。返回 {entry_date, entry_price, exit_reason, note}。
 
-        - T+1 大盘(上证)跌幅 ≤ 阈值 → 'skip_market' 放弃
-        - 个股 T+1 高开 ≥ 阈值 → 'skip_gap_high' 放弃
-        - 个股 T+1 低开 ≤ 阈值 → 'skip_gap_low' 放弃
-        - 否则 → 按 T+1 开盘价买入(entry_price=open)
-        - T+1 数据未到 / 缺值 → entry_price=None 且 exit_reason=None(保持 pending)
+        note 为买入时机说明(自然语言, 供前端展示可解释性):
+          - T+1 大盘(上证)跌幅 ≤ 阈值 → 'skip_market' 放弃
+          - 个股 T+1 高开 ≥ 阈值 → 'skip_gap_high' 放弃
+          - 个股 T+1 低开 ≤ 阈值 → 'skip_gap_low' 放弃
+          - 否则 → 按 T+1 开盘价买入(entry_price=open)
+          - T+1 数据未到 / 缺值 → entry_price=None 且 exit_reason=None(保持 pending)
         """
         pos = bisect_right(dates, pick_date)
         if pos >= len(dates):
-            return {"entry_date": None, "entry_price": None, "exit_reason": None}
+            return {"entry_date": None, "entry_price": None, "exit_reason": None, "note": None}
         entry_date = dates[pos]  # pick_date 之后第一个交易日 = T+1
         bar = self._bar_on(entry_date, symbol)
         if bar is None or bar.get("open") is None or not entry_close or entry_close <= 0:
-            return {"entry_date": None, "entry_price": None, "exit_reason": None}
+            return {"entry_date": None, "entry_price": None, "exit_reason": None, "note": None}
         open_price = float(bar["open"])
         gap = open_price / float(entry_close) - 1
+        gap_s = f"{gap * 100:+.1f}%"
 
         mkt_chg = self._index_chg_on(entry_date, dates)
         # 大盘弱势(指数数据缺失时不触发, 放行)
         if mkt_chg is not None and mkt_chg <= _MARKET_DROP_SKIP_PCT:
-            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_market"}
+            note = f"大盘 {mkt_chg * 100:+.1f}% (≤{_MARKET_DROP_SKIP_PCT * 100:+.0f}%) 弱势放弃"
+            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_market", "note": note}
         if gap >= _GAP_HIGH_SKIP_PCT:
-            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_gap_high"}
+            note = f"高开 {gap_s} (≥{_GAP_HIGH_SKIP_PCT * 100:+.0f}%) 追高放弃"
+            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_gap_high", "note": note}
         if gap <= _GAP_LOW_SKIP_PCT:
-            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_gap_low"}
-        return {"entry_date": entry_date, "entry_price": open_price, "exit_reason": None}
+            note = f"低开 {gap_s} (≤{_GAP_LOW_SKIP_PCT * 100:+.0f}%) 信号失效放弃"
+            return {"entry_date": entry_date, "entry_price": None, "exit_reason": "skip_gap_low", "note": note}
+        mkt_s = f"{mkt_chg * 100:+.1f}%" if mkt_chg is not None else "缺数据"
+        note = f"开盘 {open_price:.2f} 买入 (大盘 {mkt_s}、跳空 {gap_s})"
+        return {"entry_date": entry_date, "entry_price": open_price, "exit_reason": None, "note": note}
 
     def _scan_exit(
         self, symbol: str, entry_date: str, entry_price: float, dates: list[str], today: str,
