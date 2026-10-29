@@ -279,7 +279,7 @@ export function DailyPicks() {
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-foreground">{fmtPrice(r.entry_price ?? r.entry_close)}</td>
                     <td className="py-2 pr-3 text-right tabular-nums text-foreground">{fmtPrice(r.exit_close)}</td>
-                    <td className="py-2 pr-3">{exitReasonBadge(r)}</td>
+                    <td className="py-2 pr-3" title={r.entry_note ?? undefined}>{exitReasonBadge(r)}</td>
                     <td className={cn('py-2 pr-3 text-right font-medium tabular-nums', priceColorClass(r.pnl_pct))}>
                       {fmtPct(r.pnl_pct)}
                     </td>
@@ -332,6 +332,11 @@ function PickCard({ p }: { p: DailyPickRow }) {
         <div className="mt-1 flex items-center justify-between">
           <span className="text-[11px] text-muted">状态</span>
           {exitReasonBadge(p)}
+        </div>
+      )}
+      {p.entry_note && (
+        <div className="mt-1.5 rounded bg-muted/5 px-1.5 py-1 text-[10px] leading-relaxed text-muted">
+          {p.entry_note}
         </div>
       )}
       {families.length > 0 ? (

@@ -4790,6 +4790,7 @@ export interface DailyPickRow {
   exit_close: number | null
   exit_date: string | null
   exit_reason: string | null
+  entry_note: string | null
   max_high: number | null
   pnl_pct: number | null
   hit: boolean | null
