@@ -21,6 +21,7 @@ import math
 from bisect import bisect_right
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import polars as pl
 
 from app.tickflow.repository import enriched_dirname
@@ -218,11 +219,15 @@ class DailyPicksService:
         hold_days: int = 1,
         push_lark: bool = True,
         min_listing_days: int = _NEW_LISTING_DAYS,
+        bearish_filter: bool = True,
+        bearish_lookback_days: int = 5,
     ) -> list[dict]:
         """跑全量策略 → 聚合共振 → 过滤 → 取 Top N → 落盘。返回本次精选明细。
 
         push_lark=True 时, 落盘后顺带推送到飞书多维表格(失败不阻断选股主流程)。
         min_listing_days: 次新股过滤阈值(自然日), 上市不满该天数的股票剔除; <=0 关闭。
+        bearish_filter: 是否启用利空规避(抓巨潮公告标题关键词, 命中利空则剔除排序靠前的候选)。
+        bearish_lookback_days: 利空公告回溯自然日天数。
         """
         from app.services.screener import ScreenerService
         from app.strategy import config as strategy_config
@@ -322,6 +327,26 @@ class DailyPicksService:
                 -(kv[1]["best_score"] or 0.0),
             ),
         )
+
+        # 5.5) 利空规避: 对排序靠前的候选抓近 N 天公告标题, 命中利空关键词则剔除。
+        # 只检查靠前的一小撮(利空过滤只影响「本来会入选」的股票), 控制请求量。
+        if bearish_filter and ranked:
+            from app.services.announcement_filter import fetch_bearish_symbols
+
+            check_pool = ranked[: max(top_n * 3, 15)]
+            try:
+                bearish = fetch_bearish_symbols(
+                    [s for s, _ in check_pool],
+                    lookback_days=bearish_lookback_days,
+                    as_of=as_of,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("daily_picks: 利空过滤失败(放行): %s", e)
+                bearish = set()
+            if bearish:
+                ranked = [(s, i) for s, i in ranked if s not in bearish]
+                logger.info("daily_picks: 利空过滤剔除 %s", sorted(bearish))
+
         picks = ranked[: max(1, min(top_n, len(ranked)))]
 
         # 6) 定 settle_date(pick_date 之后第 hold_days 个交易日)
@@ -651,42 +676,117 @@ class DailyPicksService:
         self, symbol: str, entry_date: str, entry_price: float, dates: list[str], today: str,
     ) -> dict | None:
         """从 entry_date 次日逐日扫退出条件, 返回首个触发的 {exit_date, exit_close,
-        exit_reason, max_high}; 未触发返回 None。"""
+        exit_reason, max_high}; 未触发返回 None。
+
+        优先用 5m 分钟K逐根还原当日盘中触价顺序(先止损还是先止盈, 同一天内
+        涨跌方向不同结果相反); 分钟数据缺失(如 2025-01 前)回退日线 OHLC 近似。
+        """
         start = bisect_right(dates, entry_date)
         max_high = float(entry_price)
         activated = False
         stop_price = entry_price * (1 + _HARD_STOP_PCT)
         activate_price = entry_price * (1 + _TRAIL_ACTIVATE_PCT)
-        for i in range(start, len(dates)):
-            d = dates[i]
-            if d > today:
-                break
-            bar = self._bar_on(d, symbol)
-            if bar is None:
-                continue  # 停牌/缺数据跳过
-            high = bar.get("high")
-            low = bar.get("low")
-            close = bar.get("close")
-            if high is None or low is None or close is None:
+
+        scan_dates = [dates[i] for i in range(start, len(dates)) if dates[i] <= today]
+        if not scan_dates:
+            return None
+        minute_map = self._minute_5m_map(symbol, scan_dates)
+
+        for idx, d in enumerate(scan_dates):
+            arr = minute_map.get(d)
+            if arr is not None and len(arr) > 0:
+                ohlc = arr[:, :4]
+            else:
+                bar = self._bar_on(d, symbol)
+                if bar is None:
+                    continue  # 停牌/缺数据跳过
+                h = bar.get("high")
+                l = bar.get("low")
+                c = bar.get("close")
+                if h is None or l is None or c is None:
+                    continue
+                ohlc = np.array([[float(bar.get("open") or h), float(h), float(l), float(c)]], dtype=float)
+
+            res = self._resolve_day_exit(ohlc, stop_price, activate_price, activated, max_high)
+            max_high = res["max_high"]
+            activated = res["activated"]
+            if res["exit"] is not None:
+                return {"exit_date": d, "exit_close": res["exit"]["price"],
+                        "exit_reason": res["exit"]["reason"], "max_high": max_high}
+            # 最大持仓(第 max_hold 个交易日, 收盘价平)
+            close = ohlc[-1, 3]
+            if idx + 1 >= _MAX_HOLD_DAYS and np.isfinite(close):
+                return {"exit_date": d, "exit_close": float(close),
+                        "exit_reason": "max_hold", "max_high": max_high}
+        return None
+
+    def _minute_5m_map(self, symbol: str, dates: list[str]) -> dict[str, "np.ndarray"]:
+        """读某只股票在多个交易日的 5m 分钟序列, 返回 {date_str: N×6 ndarray}。
+
+        列顺序 = [open, high, low, close, volume, amount] (与回测引擎约定一致)。
+        只读 dates 对应的 date= 分区, 缺失日期自然跳过; 无分钟数据返回空 dict。
+        """
+        if not dates:
+            return {}
+        base = self.data_dir / "kline_minute_5m"
+        parts: list[str] = []
+        for d in dates:
+            p = base / f"date={d}" / "part.parquet"
+            if p.exists():
+                parts.append(str(p))
+        if not parts:
+            return {}
+        try:
+            lf = pl.scan_parquet(parts)
+            schema = lf.collect_schema().names()
+            cols = [c for c in ("open", "high", "low", "close", "volume", "amount") if c in schema]
+            df = (
+                lf.filter(pl.col("symbol") == symbol)
+                .sort("datetime")
+                .with_columns(pl.col("datetime").dt.strftime("%Y-%m-%d").alias("_d"))
+                .select(["_d"] + cols)
+                .collect(streaming=True)
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("daily_picks 5m 分钟K读取失败(%s): %s", symbol, e)
+            return {}
+        out: dict[str, "np.ndarray"] = {}
+        for sub in df.partition_by("_d", as_dict=False):
+            d_str = sub["_d"][0]
+            out[d_str] = sub.select([pl.col(c).cast(pl.Float64) for c in cols]).to_numpy()
+        return out
+
+    @staticmethod
+    def _resolve_day_exit(
+        ohlc: "np.ndarray", stop_price: float, activate_price: float, activated: bool, max_high: float,
+    ) -> dict:
+        """对单日 OHLC 序列(分钟多根 或 日线单根)逐根判断触价顺序。
+
+        ohlc: N×4 [open, high, low, close], 按时间升序。
+        同一根内止损优先(保守风控), 跨根精确判断「先止损还是先止盈」。
+        返回 {exit: {price, reason}|None, max_high, activated}。
+        """
+        highs = ohlc[:, 1]
+        lows = ohlc[:, 2]
+        for i in range(len(ohlc)):
+            hi = highs[i]
+            lo = lows[i]
+            if not (np.isfinite(hi) and np.isfinite(lo)):
                 continue
-            max_high = max(max_high, float(high))
             # 1) 硬止损(保守: 用触发价成交, 不假设更好的价格)
-            if float(low) <= stop_price:
-                return {"exit_date": d, "exit_close": round(stop_price, 4),
-                        "exit_reason": "stop_loss", "max_high": max_high}
-            # 2) 移动止盈
+            if float(lo) <= stop_price:
+                return {"exit": {"price": round(stop_price, 4), "reason": "stop_loss"},
+                        "max_high": max(max_high, float(hi)), "activated": activated}
+            # 2) 更新最高价 + 移动止盈
+            max_high = max(max_high, float(hi))
             if max_high >= activate_price:
                 activated = True
             if activated:
                 trail_price = max_high * (1 + _TRAIL_DRAWDOWN_PCT)
-                if float(low) <= trail_price:
-                    return {"exit_date": d, "exit_close": round(trail_price, 4),
-                            "exit_reason": "trailing", "max_high": max_high}
-            # 3) 最大持仓(第 max_hold 个交易日, 收盘价平)
-            if i - start + 1 >= _MAX_HOLD_DAYS:
-                return {"exit_date": d, "exit_close": float(close),
-                        "exit_reason": "max_hold", "max_high": max_high}
-        return None
+                if float(lo) <= trail_price:
+                    return {"exit": {"price": round(trail_price, 4), "reason": "trailing"},
+                            "max_high": max_high, "activated": activated}
+        return {"exit": None, "max_high": max_high, "activated": activated}
 
     def _bar_on(self, d: str, symbol: str) -> dict | None:
         """读某交易日单根 K 线(OHLC)。"""
