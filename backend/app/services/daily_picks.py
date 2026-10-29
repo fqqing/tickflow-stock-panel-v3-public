@@ -503,6 +503,7 @@ class DailyPicksService:
                 "结算价": r.get("exit_close"),
                 "持有收益%": round(float(pnl) * 100, 2) if pnl is not None else None,
                 "命中": ("是" if hit is True else "否" if hit is False else None),
+                "买入说明": r.get("entry_note"),
             })
         return out
 
@@ -525,7 +526,11 @@ class DailyPicksService:
         }
 
     def sync_settlement_to_lark(self) -> dict:
-        """把已结算 pick 的 结算价/持有收益%/命中/结算日期 回写到飞书表。"""
+        """把结算字段 + 买入说明回写到飞书表。
+
+        回写范围: 已有买入说明(含正常买入/放弃)或已结算(有盈亏)的 pick。
+        「放弃买入」(skip_*) 无盈亏但有 note, 也回写「买入说明」让看板能看到放弃原因。
+        """
         from app.services import lark_bitable as lb
 
         if not LARK_BASE_TOKEN or not LARK_TABLE_ID:
@@ -533,8 +538,13 @@ class DailyPicksService:
         df = self._load()
         if df.is_empty() or "pnl_pct" not in df.columns:
             return {"ok": True, "synced": 0, "error": None}
-        settled = df.filter(pl.col("pnl_pct").is_not_null())
-        if settled.is_empty():
+        if "entry_note" in df.columns:
+            to_sync = df.filter(
+                pl.col("entry_note").is_not_null() | pl.col("pnl_pct").is_not_null()
+            )
+        else:
+            to_sync = df.filter(pl.col("pnl_pct").is_not_null())
+        if to_sync.is_empty():
             return {"ok": True, "synced": 0, "error": None}
 
         rows = lb.list_records(LARK_BASE_TOKEN, LARK_TABLE_ID, ["代码", "选股日期"])
@@ -550,7 +560,7 @@ class DailyPicksService:
 
         synced = 0
         errors: list[str] = []
-        for r in settled.iter_rows(named=True):
+        for r in to_sync.iter_rows(named=True):
             code = str(r.get("symbol") or "").split(".")[0]
             d = str(r.get("pick_date") or "")[:10]
             rid = rid_by_key.get((code, d))
@@ -558,12 +568,14 @@ class DailyPicksService:
                 continue
             pnl = r.get("pnl_pct")
             hit = r.get("hit")
-            fields = {
-                "结算价": r.get("exit_close"),
-                "持有收益%": round(float(pnl) * 100, 2) if pnl is not None else None,
-                "命中": ("是" if hit is True else "否" if hit is False else None),
-                "结算日期": str(r.get("settle_date") or "")[:10],
-            }
+            fields = {"买入说明": r.get("entry_note")}
+            if pnl is not None:
+                fields.update({
+                    "结算价": r.get("exit_close"),
+                    "持有收益%": round(float(pnl) * 100, 2),
+                    "命中": ("是" if hit is True else "否" if hit is False else None),
+                    "结算日期": str(r.get("settle_date") or "")[:10],
+                })
             res = lb.upsert_record(
                 LARK_BASE_TOKEN, LARK_TABLE_ID, rid, fields, date_fields=("结算日期",),
             )
