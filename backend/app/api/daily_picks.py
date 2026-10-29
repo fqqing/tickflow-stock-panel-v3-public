@@ -16,7 +16,8 @@ router = APIRouter(prefix="/api/daily-picks", tags=["daily-picks"])
 
 
 class RunRequest(BaseModel):
-    top_n: int = 5
+    top_n: int = 6
+    min_family_count: int = 3
     hold_days: int = 1
     as_of: Optional[date] = None
     min_listing_days: Optional[int] = None  # 次新股过滤阈值(自然日), None=用服务默认 60
@@ -34,7 +35,10 @@ def run_picks(req: RunRequest, request: Request):
     """手动触发一次选股(盘后管道已定时调用, 这里供调试/补跑)。"""
     svc = _svc(request)
     ml = req.min_listing_days if req.min_listing_days is not None else 60
-    rows = svc.run(as_of=req.as_of, top_n=req.top_n, hold_days=req.hold_days, min_listing_days=ml)
+    rows = svc.run(
+        as_of=req.as_of, top_n=req.top_n, min_family_count=req.min_family_count,
+        hold_days=req.hold_days, min_listing_days=ml,
+    )
     return {
         "pick_date": rows[0]["pick_date"] if rows else None,
         "picks": rows,

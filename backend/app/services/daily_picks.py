@@ -215,15 +215,21 @@ class DailyPicksService:
     def run(
         self,
         as_of: date | None = None,
-        top_n: int = 5,
+        top_n: int = 6,
+        min_family_count: int = 3,
         hold_days: int = 1,
         push_lark: bool = True,
         min_listing_days: int = _NEW_LISTING_DAYS,
         bearish_filter: bool = True,
         bearish_lookback_days: int = 5,
     ) -> list[dict]:
-        """跑全量策略 → 聚合共振 → 过滤 → 取 Top N → 落盘。返回本次精选明细。
+        """跑全量策略 → 聚合共振 → 过滤 → 质量门槛 → 取 Top N → 落盘。返回本次精选明细。
 
+        top_n: 入选数量上限。0 号工程回测显示「固定 5」放宽到「上限 6」时 1/3/5 日收益
+            全面不差、且 5 日收益由负转正, 故默认 6(不再写死 5, 按质量动态取)。
+        min_family_count: 质量门槛, 跨家族共振数低于此值的弱候选剔除(宁缺毋滥, 不降级凑数)。
+            0 号工程回测: family_count>=3 命中 48.85%/均 +0.50%, 明显好于 =1 的 44.45%/-0.10%,
+            故默认 3; <=0 关闭。
         push_lark=True 时, 落盘后顺带推送到飞书多维表格(失败不阻断选股主流程)。
         min_listing_days: 次新股过滤阈值(自然日), 上市不满该天数的股票剔除; <=0 关闭。
         bearish_filter: 是否启用利空规避(抓巨潮公告标题关键词, 命中利空则剔除排序靠前的候选)。
@@ -328,6 +334,10 @@ class DailyPicksService:
             ),
         )
 
+        # 5.1) 质量门槛: 跨家族共振数低于 min_family_count 的弱候选剔除(宁缺毋滥, 不降级凑数)。
+        if min_family_count > 0:
+            ranked = [(s, i) for s, i in ranked if len(i["families"]) >= min_family_count]
+
         # 5.5) 利空规避: 对排序靠前的候选抓近 N 天公告标题, 命中利空关键词则剔除。
         # 只检查靠前的一小撮(利空过滤只影响「本来会入选」的股票), 控制请求量。
         if bearish_filter and ranked:
@@ -393,7 +403,10 @@ class DailyPicksService:
         merged = pl.concat([existing, new_df], how="vertical") if not existing.is_empty() else new_df
         self._save(merged)
 
-        logger.info("daily_picks: %s 选出 %d 只 (top_n=%d, hold=%d)", as_of, len(rows), top_n, hold_days)
+        logger.info(
+            "daily_picks: %s 选出 %d 只 (top_n=%d, min_family_count=%d, hold=%d)",
+            as_of, len(rows), top_n, min_family_count, hold_days,
+        )
         if push_lark and rows:
             try:
                 push_res = self.push_rows_to_lark(rows)
